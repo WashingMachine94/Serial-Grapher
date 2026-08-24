@@ -1,5 +1,6 @@
 import { getSerialManager } from './state';
 import { highlightColors } from './translation';
+import { getFileUploadManager } from './fileUpload';
 
 export type ParserTrigger = 'includes' | 'startsWith';
 
@@ -197,11 +198,17 @@ class DataBufferManager {
 
     /** Process the most recent line from the serial manager (for manual trigger) */
     processLatestLine() {
-        const manager = getSerialManager();
-        if (!manager) return;
-        const lines = manager.getLines();
-        if (lines.length > 0) {
-            this.processLine(lines.at(-1)!);
+        const sources = [
+            getSerialManager(),
+            getFileUploadManager(),
+        ];
+
+        const latestLine = sources
+            .flatMap((manager) => manager.getLines())
+            .at(-1);
+
+        if (latestLine) {
+            this.processLine(latestLine);
         }
     }
 

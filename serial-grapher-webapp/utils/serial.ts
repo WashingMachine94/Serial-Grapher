@@ -36,6 +36,8 @@ export class SerialManager {
     private lineBuffer = ''; // partial line from previous chunk
     private callbacks: SerialCallbacks[] = [];
     private readAbortController: AbortController | null = null;
+    private latestLine: string | null = null;
+    private latestLineTimestamp = 0;
 
     constructor(callbacks: SerialCallbacks = {}) {
         this.options = { ...DEFAULT_OPTIONS };
@@ -149,6 +151,14 @@ export class SerialManager {
         return [...this.lines];
     }
 
+    getLatestLine(): string | null {
+        return this.latestLine;
+    }
+
+    getLatestLineTimestamp(): number {
+        return this.latestLineTimestamp;
+    }
+
     /** Get connection status. */
     isConnected(): boolean {
         return this.connected;
@@ -172,6 +182,8 @@ export class SerialManager {
     clearBuffer(): void {
         this.lines = [];
         this.lineBuffer = '';
+        this.latestLine = null;
+        this.latestLineTimestamp = 0;
         this.emitData(this.lines);
     }
 
@@ -234,6 +246,8 @@ export class SerialManager {
             if (this.lines.length > bufferSize) {
                 this.lines = this.lines.slice(-bufferSize);
             }
+            this.latestLine = completeLines.at(-1) ?? null;
+            this.latestLineTimestamp = Date.now();
             // Notify listeners with only the lines completed by this read.
             this.emitData(completeLines);
         }

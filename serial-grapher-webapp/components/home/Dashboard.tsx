@@ -13,7 +13,9 @@ import {
     Filler,
 } from 'chart.js';
 import { Line } from 'react-chartjs-2';
-import { dataBufferManager, NodeData } from '@/utils/dataBufferManager';
+import { ArrowLineDownIcon } from '@phosphor-icons/react';
+import { Button } from '@/components/ui/button';
+import { dataBufferManager } from '@/utils/dataBufferManager';
 
 ChartJS.register(
     CategoryScale,
@@ -59,8 +61,11 @@ function formatAxisTimestamp(timestamp: number): string {
         : timestamp.toFixed(3);
 }
 
-function getYScaleRange(datasets: Array<{ data: Array<number | string> }>) {
-    const numericValues = datasets
+function getYScaleRange(
+    datasets: Array<{ data: Array<number | string>; hidden?: boolean }>,
+) {
+    const visibleDatasets = datasets.filter((dataset) => !dataset.hidden);
+    const numericValues = visibleDatasets
         .flatMap((dataset) => dataset.data)
         .filter((value): value is number => typeof value === 'number');
 
@@ -78,14 +83,29 @@ function getYScaleRange(datasets: Array<{ data: Array<number | string> }>) {
     };
 }
 
+type ChartDataset = {
+    id: string;
+    label: string;
+    data: Array<number | string>;
+    borderColor: string;
+    backgroundColor: string;
+    borderWidth: number;
+    pointRadius: number;
+    tension: number;
+    fill: boolean;
+    hidden?: boolean;
+};
+
+type ChartDataState = {
+    labels: string[];
+    datasets: ChartDataset[];
+};
+
 export default function Dashboard() {
-    const [nodes, setNodes] = useState<NodeData[]>([]);
-    const [isReady, setIsReady] = useState(false);
-    const [visiblePoints, setVisiblePoints] = useState(DEFAULT_VISIBLE_POINTS);
-    const [chartData, setChartData] = useState<{
-        labels: string[];
-        datasets: any[];
-    }>({ labels: [], datasets: [] });
+    const [chartData, setChartData] = useState<ChartDataState>({
+        labels: [],
+        datasets: [],
+    });
 
     const dataMap = useRef<
         Map<string, { timestamps: number[]; values: (number | string)[] }>
@@ -98,6 +118,10 @@ export default function Dashboard() {
     const renderChartData = useCallback(() => {
         const currentNodes = dataBufferManager.getNodes();
         const nodeList = currentNodes.filter((n) => !n.isTimestamp);
+
+        const previousHidden = new Map(
+            chartData.datasets.map((dataset) => [dataset.id, !!dataset.hidden]),
+        );
 
         if (nodeList.length === 0) {
             setChartData({ labels: [], datasets: [] });
@@ -129,6 +153,7 @@ export default function Dashboard() {
             const color = node.color || 'rgba(0,0,0,0.4)';
 
             return {
+                id: node.id,
                 label: `${node.parserName}: ${node.name}`,
                 data: nodeValues,
                 borderColor: color,
@@ -137,7 +162,8 @@ export default function Dashboard() {
                 pointRadius: 0,
                 tension: 0.1,
                 fill: false,
-            };
+                hidden: previousHidden.get(node.id) ?? false,
+            } satisfies ChartDataset;
         });
 
         const labels = visibleTimestamps.map((timestamp) =>
@@ -145,7 +171,7 @@ export default function Dashboard() {
         );
 
         setChartData({ labels, datasets });
-    }, []);
+    }, [chartData.datasets]);
 
     const flushPendingPoints = useCallback(() => {
         if (pendingPointsRef.current.size === 0) return;
@@ -182,7 +208,6 @@ export default function Dashboard() {
 
     useEffect(() => {
         const initialNodes = dataBufferManager.getNodes();
-        setNodes(initialNodes);
 
         initialNodes.forEach((node) => {
             if (!node.isTimestamp && node.buffer.length > 0) {
@@ -193,8 +218,9 @@ export default function Dashboard() {
             }
         });
 
-        setIsReady(true);
-        renderChartData();
+        requestAnimationFrame(() => {
+            renderChartData();
+        });
 
         const unsubData = dataBufferManager.subscribeData(
             (nodeId, dataPoint) => {
@@ -211,7 +237,6 @@ export default function Dashboard() {
 
         const unsubNodes = dataBufferManager.subscribeNodesChanged(() => {
             const updatedNodes = dataBufferManager.getNodes();
-            setNodes(updatedNodes);
 
             pendingPointsRef.current.clear();
             dataMap.current.clear();
@@ -253,11 +278,83 @@ export default function Dashboard() {
             if (nextCount === visiblePointsRef.current) return;
 
             visiblePointsRef.current = nextCount;
-            setVisiblePoints(nextCount);
             renderChartData();
         },
         [renderChartData],
     );
+
+    const formatCsvCell = (value: number | string | null | undefined) => {
+        const text = value == null ? '' : String(value);
+        const trimmed = text.trim();
+
+        if (
+            trimmed === '' ||
+            /^-?\d+(\.\d+)?([eE][+-]?\d+)?$/.test(trimmed) ||
+            /^-?\.\d+([eE][+-]?\d+)?$/.test(trimmed)
+        ) {
+            return trimmed;
+        }
+
+        return `"${trimmed.replace(/"/g, '""')}"`;
+    };
+
+    const exportCsv = () => {
+        const blocks: string[] = [];
+
+        for (const parser of dataBufferManager.getParsers()) {
+            if (parser.nodes.length === 0) continue;
+
+            const rows: string[] = [];
+            rows.push(`Parser: ${parser.name}`);
+
+            const header = parser.nodes.map((node) => node.name);
+            rows.push(header.map((cell) => formatCsvCell(cell)).join(','));
+
+            const timestampNode = parser.nodes.find((node) => node.isTimestamp);
+
+            if (timestampNode) {
+                const timestampValues = timestampNode.buffer;
+                for (const timestampPoint of timestampValues) {
+                    const row: string[] = [
+                        formatCsvCell(timestampPoint.value),
+                    ];
+                    for (const node of parser.nodes.filter(
+                        (candidate) => candidate.id !== timestampNode.id,
+                    )) {
+                        const match = node.buffer.find(
+                            (point) => point.timestamp === timestampPoint.timestamp,
+                        );
+                        row.push(formatCsvCell(match?.value ?? ''));
+                    }
+                    rows.push(row.join(','));
+                }
+            } else {
+                const longestLength = Math.max(
+                    ...parser.nodes.map((node) => node.buffer.length),
+                    0,
+                );
+                for (let index = 0; index < longestLength; index += 1) {
+                    const row = parser.nodes.map((node) =>
+                        formatCsvCell(node.buffer[index]?.value ?? ''),
+                    );
+                    rows.push(row.join(','));
+                }
+            }
+
+            blocks.push(rows.join('\n'));
+        }
+
+        const csv = blocks.join('\n\n');
+        if (!csv) return;
+
+        const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = 'serial-grapher-export.csv';
+        link.click();
+        URL.revokeObjectURL(url);
+    };
 
     const options = {
         animation: false as const,
@@ -299,12 +396,40 @@ export default function Dashboard() {
             legend: {
                 position: 'top' as const,
                 labels: { usePointStyle: true, pointStyle: 'circle' },
+                onClick: (
+                    _event: unknown,
+                    legendItem: { datasetIndex?: number },
+                    legend: { chart: { data: { datasets: ChartDataset[] }; update: () => void } },
+                ) => {
+                    const datasetIndex = legendItem.datasetIndex;
+                    if (datasetIndex == null) return;
+
+                    const chart = legend.chart;
+                    const dataset = chart.data.datasets[datasetIndex];
+                    if (!dataset) return;
+
+                    const nextHidden = !dataset.hidden;
+                    dataset.hidden = nextHidden;
+                    chart.update();
+
+                    setChartData((previous) => ({
+                        ...previous,
+                        datasets: previous.datasets.map((currentDataset, index) =>
+                            index === datasetIndex
+                                ? { ...currentDataset, hidden: nextHidden }
+                                : currentDataset,
+                        ),
+                    }));
+                },
             },
             tooltip: {
                 mode: 'index' as const,
                 intersect: false,
                 callbacks: {
-                    label: (ctx: any) => {
+                    label: (ctx: {
+                        dataset: { label?: string };
+                        parsed: { y?: number | string };
+                    }) => {
                         const label = ctx.dataset.label || '';
                         const value = ctx.parsed.y;
                         return `${label}: ${typeof value === 'number' ? value.toFixed(3) : value}`;
@@ -314,17 +439,16 @@ export default function Dashboard() {
         },
     };
 
-    if (!isReady)
-        return (
-            <div className="p-4 text-center text-muted-foreground">
-                Loading dashboard…
-            </div>
-        );
-
     const hasData = chartData.datasets.some((ds) => ds.data.length > 0);
 
     return (
-        <div className="p-4 h-full">
+        <div className="flex h-full flex-col gap-3 p-4">
+            <div className="flex justify-end">
+                <Button variant="outline" onClick={exportCsv} className="gap-2">
+                    <ArrowLineDownIcon size={32} />
+                    CSV
+                </Button>
+            </div>
             {!hasData ? (
                 <div className="h-100 flex items-center justify-center text-muted-foreground">
                     No data yet. Configure nodes, regex, and press Subscribe.

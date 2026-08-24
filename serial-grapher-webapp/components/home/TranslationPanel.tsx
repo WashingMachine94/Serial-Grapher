@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { getSerialManager } from '@/utils/state';
 import { getBluetoothManager } from '@/utils/bluetooth';
+import { getFileUploadManager } from '@/utils/fileUpload';
 import { Button } from '../ui/button';
 import {
     ArrowsClockwiseIcon,
@@ -58,6 +59,27 @@ export default function TranslationPanel() {
     const subscribedRef = useRef(false);
     const sourceLinesRef = useRef<string[]>([]);
 
+    const getLatestInputLine = () => {
+        const candidates = [
+            {
+                line: getSerialManager().getLatestLine(),
+                timestamp: getSerialManager().getLatestLineTimestamp(),
+            },
+            {
+                line: getBluetoothManager().getLatestLine(),
+                timestamp: getBluetoothManager().getLatestLineTimestamp(),
+            },
+            {
+                line: getFileUploadManager().getLatestLine(),
+                timestamp: getFileUploadManager().getLatestLineTimestamp(),
+            },
+        ].filter((item) => item.line != null && item.line.length > 0);
+
+        if (candidates.length === 0) return null;
+
+        return candidates.sort((a, b) => a.timestamp - b.timestamp).at(-1)?.line ?? null;
+    };
+
     useEffect(() => {
         const unsubscribe = dataBufferManager.subscribeNodesChanged(() => {
             const updatedParsers = dataBufferManager.getParsers();
@@ -75,9 +97,11 @@ export default function TranslationPanel() {
     useEffect(() => {
         const serialManager = getSerialManager();
         const bluetoothManager = getBluetoothManager();
+        const fileUploadManager = getFileUploadManager();
         sourceLinesRef.current = [
             ...serialManager.getLines(),
             ...bluetoothManager.getLines(),
+            ...fileUploadManager.getLines(),
         ].slice(-MAX_TRANSLATION_LINES);
         const handleIncomingLines = (newLines: string[]) => {
             if (newLines.length === 0) return;
@@ -96,9 +120,13 @@ export default function TranslationPanel() {
         const unsubscribeBluetooth = bluetoothManager.registerCallbacks({
             onData: handleIncomingLines,
         });
+        const unsubscribeFileUpload = fileUploadManager.registerCallbacks({
+            onData: handleIncomingLines,
+        });
         return () => {
             unsubscribeSerial();
             unsubscribeBluetooth();
+            unsubscribeFileUpload();
         };
     }, []);
 
@@ -319,11 +347,7 @@ export default function TranslationPanel() {
                                                     variant="outline"
                                                     size="icon"
                                                     onClick={() => {
-                                                        const latest =
-                                                            [
-                                                                ...getSerialManager().getLines(),
-                                                                ...getBluetoothManager().getLines(),
-                                                            ].at(-1) ?? null;
+                                                        const latest = getLatestInputLine();
                                                         if (
                                                             !subscribed &&
                                                             latest

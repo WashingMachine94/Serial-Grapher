@@ -1,6 +1,7 @@
 import Dashboard from '@/components/home/Dashboard';
 import SerialPanel from '@/components/home/SerialPanel';
 import BluetoothPanel from '@/components/home/BluetoothPanel';
+import FileUploadPanel from '@/components/home/FileUploadPanel';
 import TranslationPanel from '@/components/home/TranslationPanel';
 import {
     ResizableHandle,
@@ -35,6 +36,9 @@ export default function Home() {
                                         <TabsTrigger id="ble" value="ble">
                                             Bluetooth
                                         </TabsTrigger>
+                                        <TabsTrigger id="file" value="file">
+                                            File Upload
+                                        </TabsTrigger>
                                     </TabsList>
                                     <TabsContent
                                         value="serial"
@@ -47,6 +51,12 @@ export default function Home() {
                                         className="flex h-full min-h-0 flex-col overflow-hidden"
                                     >
                                         <BluetoothPanel />
+                                    </TabsContent>
+                                    <TabsContent
+                                        value="file"
+                                        className="flex h-full min-h-0 flex-col overflow-hidden"
+                                    >
+                                        <FileUploadPanel />
                                     </TabsContent>
                                 </Tabs>
                             </div>

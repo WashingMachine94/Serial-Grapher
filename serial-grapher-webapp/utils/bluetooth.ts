@@ -104,6 +104,8 @@ export class BluetoothManager {
     private lines: string[] = [];
     private decoder = new TextDecoder();
     private callbacks: BluetoothCallbacks[] = [];
+    private latestLine: string | null = null;
+    private latestLineTimestamp = 0;
 
     constructor(callbacks: BluetoothCallbacks = {}) {
         this.registerCallbacks(callbacks);
@@ -254,6 +256,14 @@ export class BluetoothManager {
         return [...this.lines];
     }
 
+    getLatestLine(): string | null {
+        return this.latestLine;
+    }
+
+    getLatestLineTimestamp(): number {
+        return this.latestLineTimestamp;
+    }
+
     isConnected(): boolean {
         return this.connected;
     }
@@ -291,6 +301,8 @@ export class BluetoothManager {
     clearBuffer(): void {
         this.lines = [];
         this.decoder = new TextDecoder();
+        this.latestLine = null;
+        this.latestLineTimestamp = 0;
         this.emitData([]);
     }
 
@@ -336,6 +348,8 @@ export class BluetoothManager {
 
         this.lines.push(...packetEntries);
         if (this.lines.length > 1000) this.lines = this.lines.slice(-1000);
+        this.latestLine = packetEntries.at(-1) ?? null;
+        this.latestLineTimestamp = Date.now();
         this.emitData(packetEntries);
     }
 
