@@ -157,3 +157,60 @@
 ::-webkit-scrollbar-thumb:hover {
   background: #222; 
 }
+
+/* CHART STYLING */
+.highcharts-background {
+  fill: transparent;
+}
+
+/* LABELS */
+.highcharts-title {
+  fill: #fff !important;
+  font-size: medium !important;
+  font-weight: 200 !important;
+}
+
+.highcharts-legend-item text {
+  fill: #ccc !important;
+  font-weight: 300;
+}
+
+.highcharts-legend-item:hover text {
+  fill: #fff !important;
+  font-weight: 400;
+}
+.highcharts-axis {
+  fill: #ccc !important;
+}
+
+.highcharts-axis text {
+  fill: #ccc !important;
+}
+
+.highcharts-credits {
+  fill: transparent !important;
+  pointer-events: none !important;
+}
+
+/* SERIES */
+.highcharts-graph {
+  stroke-width: 1.5px;
+}
+
+.highcharts-xaxis path {
+  stroke: #ccc;
+}
+.highcharts-xaxis-labels text {
+  fill: #ccc !important;
+}
+.highcharts-yaxis path {
+  stroke: #ccc;
+}
+.highcharts-yaxis-labels text {
+  fill: #ccc !important;
+}
+
+.highcharts-grid path {
+  stroke: #444;
+  stroke-dasharray: 1 1;
+}
