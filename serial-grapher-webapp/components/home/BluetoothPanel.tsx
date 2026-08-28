@@ -6,8 +6,8 @@ import { Button } from '../ui/button';
 import { Input } from '../ui/input';
 import { toast } from 'sonner';
 import {
+    BluetoothIcon,
     GearIcon,
-    PaperPlaneRightIcon,
     PlusIcon,
     TrashIcon,
 } from '@phosphor-icons/react';
@@ -20,12 +20,7 @@ import {
     PopoverTrigger,
 } from '../ui/popover';
 
-const MAX_DISPLAY_LINES = 50;
-
 export default function BluetoothPanel() {
-    const [lines, setLines] = useState<string[]>(() =>
-        getBluetoothManager().getLines().slice(-MAX_DISPLAY_LINES),
-    );
     const [connected, setConnected] = useState(() =>
         getBluetoothManager().isConnected(),
     );
@@ -33,17 +28,13 @@ export default function BluetoothPanel() {
         getBluetoothManager().getOptionalServices(),
     );
     const [newService, setNewService] = useState('');
-    const [inputText, setInputText] = useState('');
     const managerRef = useRef<BluetoothManager | null>(null);
 
+    // Bluetooth state tracking
     useEffect(() => {
         const manager = getBluetoothManager();
         managerRef.current = manager;
         return manager.registerCallbacks({
-            onData: (newLines) =>
-                setLines((currentLines) =>
-                    [...currentLines, ...newLines].slice(-MAX_DISPLAY_LINES),
-                ),
             onConnect: () => {
                 setConnected(true);
                 const servicesDescription = manager
@@ -75,22 +66,12 @@ export default function BluetoothPanel() {
         try {
             await (managerRef.current ?? getBluetoothManager()).connect();
         } catch {
-            // The manager reports the detailed error through its callback.
+            // Reported through callback.
         }
     };
 
     const disconnect = async () => {
         await (managerRef.current ?? getBluetoothManager()).disconnect();
-    };
-
-    const sendData = async () => {
-        if (!inputText.trim()) return;
-        try {
-            await (managerRef.current ?? getBluetoothManager()).send(inputText);
-            setInputText('');
-        } catch (error) {
-            toast.error(error instanceof Error ? error.message : String(error));
-        }
     };
 
     const addService = () => {
@@ -117,13 +98,6 @@ export default function BluetoothPanel() {
 
     return (
         <div className="flex flex-col gap-3 min-h-0 h-full">
-            <div className="flex-1 min-h-0 overflow-auto bg-black font-mono text-xs border rounded-lg p-3 text-muted-foreground">
-                {lines.map((line, index) => (
-                    <div key={index}>{line}</div>
-                ))}
-                {lines.length === 0 && <div>Waiting for data...</div>}
-            </div>
-
             <div className="flex flex-row flex-wrap items-center gap-3">
                 <Popover>
                     <PopoverTrigger render={<Button variant="outline" />}>
@@ -186,29 +160,8 @@ export default function BluetoothPanel() {
                     variant={connected ? 'destructive' : 'default'}
                     onClick={() => void (connected ? disconnect() : connect())}
                 >
-                    {connected ? 'Disconnect' : 'Connect'}
-                </Button>
-            </div>
-
-            <div className="flex flex-row gap-3">
-                <Input
-                    placeholder="Type a message..."
-                    value={inputText}
-                    onChange={(e) => setInputText(e.target.value)}
-                    onKeyDown={(e) => {
-                        if (e.key === 'Enter') {
-                            e.preventDefault();
-                            void sendData();
-                        }
-                    }}
-                    disabled={!connected}
-                    className="flex-1"
-                />
-                <Button
-                    onClick={() => void sendData()}
-                    disabled={!connected || !inputText.trim()}
-                >
-                    <PaperPlaneRightIcon />
+                    <BluetoothIcon size={18} />
+                    {connected ? 'Disconnect' : 'Connect BLE'}
                 </Button>
             </div>
         </div>

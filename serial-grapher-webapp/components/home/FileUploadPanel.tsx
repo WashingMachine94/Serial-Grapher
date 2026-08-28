@@ -9,12 +9,7 @@ import {
     type FileUploadManager,
 } from '@/utils/fileUpload';
 
-const MAX_DISPLAY_LINES = 50;
-
 export default function FileUploadPanel() {
-    const [lines, setLines] = useState<string[]>(() =>
-        getFileUploadManager().getLines().slice(-MAX_DISPLAY_LINES),
-    );
     const [isDragging, setIsDragging] = useState(false);
     const fileInputRef = useRef<HTMLInputElement>(null);
     const managerRef = useRef<FileUploadManager | null>(null);
@@ -24,10 +19,6 @@ export default function FileUploadPanel() {
         managerRef.current = manager;
 
         return manager.registerCallbacks({
-            onData: (newLines) =>
-                setLines((currentLines) =>
-                    [...currentLines, ...newLines].slice(-MAX_DISPLAY_LINES),
-                ),
             onError: (error) =>
                 toast.error(
                     error.message || 'Failed to process the uploaded file.',
@@ -51,14 +42,14 @@ export default function FileUploadPanel() {
         try {
             await manager.injectFiles(files);
         } catch {
-            // Error handling is provided by the manager callback.
+            // Handled by callback
         }
     };
 
     return (
-        <div className="flex h-full min-h-0 flex-col gap-3">
+        <div className="flex h-full min-h-0 flex-col">
             <div
-                className={`flex cursor-pointer flex-col items-center justify-center gap-1 rounded-lg border-2 border-dashed p-3 text-center transition-colors ${
+                className={`flex min-h-11 cursor-pointer items-center justify-start gap-2 rounded-lg border-2 border-dashed px-3 py-2 text-left transition-colors ${
                     isDragging
                         ? 'border-primary bg-primary/5'
                         : 'border-muted-foreground/30 bg-muted/20 hover:border-primary/60'
@@ -90,9 +81,9 @@ export default function FileUploadPanel() {
                     }
                 }}
             >
-                <UploadSimpleIcon size={36} className="text-muted-foreground" />
-                <Button variant="outline" type="button">
-                    Choose files
+                <UploadSimpleIcon size={18} className="text-muted-foreground" />
+                <Button variant="outline" type="button" size="sm">
+                    File data upload
                 </Button>
                 <input
                     ref={fileInputRef}
@@ -106,13 +97,6 @@ export default function FileUploadPanel() {
                         }
                     }}
                 />
-            </div>
-
-            <div className="flex-1 min-h-0 overflow-auto bg-black font-mono text-xs border rounded-lg p-3 text-muted-foreground">
-                {lines.map((line, index) => (
-                    <div key={`${line}-${index}`}>{line}</div>
-                ))}
-                {lines.length === 0 && <div>Waiting for data...</div>}
             </div>
         </div>
     );

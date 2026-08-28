@@ -1,7 +1,6 @@
 'use client';
 
 import { Field, FieldGroup, FieldLabel } from '@/components/ui/field';
-import { Input } from '@/components/ui/input';
 import {
     Combobox,
     ComboboxContent,
@@ -20,7 +19,7 @@ import {
 } from '@/components/ui/popover';
 import { Button } from '../ui/button';
 import { useState, useEffect, useRef } from 'react';
-import { GearIcon, PaperPlaneRightIcon } from '@phosphor-icons/react';
+import { GearIcon } from '@phosphor-icons/react';
 import { toast } from 'sonner';
 import {
     SerialManager,
@@ -29,27 +28,24 @@ import {
     FlowControlType,
 } from '@/utils/serial';
 import { getSerialManager } from '@/utils/state';
+import { SERIAL_SETTINGS } from '@/config';
 
-const BAUD_RATES = [9600, 19200, 38400, 57600, 115200, 921600];
+const TOAST_DURATION_SHORT_MS = 3000;
+const TOAST_DURATION_ERROR_MS = 4000;
+const BAUD_RATES = SERIAL_SETTINGS.BAUD_RATES;
 
 const DEFAULT_OPTIONS: SerialOptions = {
-    baudRate: 115200,
-    dataBits: 8,
-    stopBits: 1,
-    parity: 'none',
-    flowControl: 'none',
-    bufferSize: 18,
+    baudRate: SERIAL_SETTINGS.DEFAULT_BAUD_RATE,
+    dataBits: SERIAL_SETTINGS.DEFAULT_DATA_BITS,
+    stopBits: SERIAL_SETTINGS.DEFAULT_STOP_BITS,
+    parity: SERIAL_SETTINGS.DEFAULT_PARITY,
+    flowControl: SERIAL_SETTINGS.DEFAULT_FLOW_CONTROL,
 };
-const MAX_DISPLAY_LINES = 9;
 
 export default function SerialPanel() {
-    const [lines, setLines] = useState<string[]>(() =>
-        getSerialManager().getLines().slice(-MAX_DISPLAY_LINES),
-    );
     const [connected, setConnected] = useState(() =>
         getSerialManager().isConnected(),
     );
-    const [inputText, setInputText] = useState('');
 
     const [baudRate, setBaudRate] = useState(DEFAULT_OPTIONS.baudRate!);
     const [dataBits, setDataBits] = useState(DEFAULT_OPTIONS.dataBits!);
@@ -58,9 +54,7 @@ export default function SerialPanel() {
     const [flowControl, setFlowControl] = useState<FlowControlType>(
         DEFAULT_OPTIONS.flowControl!,
     );
-    const [bufferSize, setBufferSize] = useState(DEFAULT_OPTIONS.bufferSize!);
 
-    const terminalRef = useRef<HTMLDivElement>(null);
     const serialManagerRef = useRef<SerialManager | null>(null);
     const toastIdRef = useRef<string | number | null>(null);
     const unsubscribeRef = useRef<(() => void) | null>(null);
@@ -70,10 +64,6 @@ export default function SerialPanel() {
         serialManagerRef.current = manager;
 
         const unsubscribe = manager.registerCallbacks({
-            onData: (newLines) =>
-                setLines((currentLines) =>
-                    [...currentLines, ...newLines].slice(-MAX_DISPLAY_LINES),
-                ),
             onConnect: () => {
                 setConnected(true);
                 if (toastIdRef.current) {
@@ -81,7 +71,7 @@ export default function SerialPanel() {
                     toastIdRef.current = null;
                 }
                 toast.success('Connected to device', {
-                    duration: 3000,
+                    duration: TOAST_DURATION_SHORT_MS,
                 });
             },
             onDisconnect: () => {
@@ -92,7 +82,7 @@ export default function SerialPanel() {
                 }
                 toast.info('Disconnected', {
                     description: 'Serial connection has been closed.',
-                    duration: 3000,
+                    duration: TOAST_DURATION_SHORT_MS,
                 });
             },
             onError: (error) => {
@@ -104,7 +94,7 @@ export default function SerialPanel() {
                 toast.error(error.message || 'An error occurred.', {
                     description:
                         'An error occurred with the serial connection.',
-                    duration: 4000,
+                    duration: TOAST_DURATION_ERROR_MS,
                 });
             },
         });
@@ -129,7 +119,6 @@ export default function SerialPanel() {
             stopBits,
             parity,
             flowControl,
-            bufferSize,
         };
 
         // Show loading toast and store its ID
@@ -138,7 +127,7 @@ export default function SerialPanel() {
         try {
             await manager.connect(options);
             // Success is handled by onConnect callback
-        } catch (error) {
+        } catch {
             // Error is handled by onError callback
             // But if the error isn't caught by the callback, handle it here
             if (toastIdRef.current) {
@@ -164,62 +153,20 @@ export default function SerialPanel() {
         }
     };
 
-    const sendData = async () => {
-        const manager = serialManagerRef.current ?? getSerialManager();
-        if (!manager || !manager.isConnected()) {
-            toast.warning('Not Connected', {
-                description: 'Please connect to a serial device first.',
-                duration: 3000,
-            });
-            return;
-        }
-        if (!inputText.trim()) return;
-
-        try {
-            await manager.send(inputText);
-            setInputText('');
-        } catch (error) {
-            // error handled by onError callback
-            console.error('Send error:', error);
-        }
-    };
-
     const resetSettings = () => {
         setBaudRate(DEFAULT_OPTIONS.baudRate!);
         setDataBits(DEFAULT_OPTIONS.dataBits!);
         setStopBits(DEFAULT_OPTIONS.stopBits!);
         setParity(DEFAULT_OPTIONS.parity!);
         setFlowControl(DEFAULT_OPTIONS.flowControl!);
-        setBufferSize(DEFAULT_OPTIONS.bufferSize!);
-        (serialManagerRef.current ?? getSerialManager()).setBufferSize(
-            DEFAULT_OPTIONS.bufferSize!,
-        );
         toast.info('Settings Reset', {
             description: 'Serial settings have been restored to defaults.',
-            duration: 3000,
+            duration: TOAST_DURATION_SHORT_MS,
         });
     };
 
-    useEffect(() => {
-        if (bufferSize > 0) {
-            (serialManagerRef.current ?? getSerialManager()).setBufferSize(
-                bufferSize,
-            );
-        }
-    }, [bufferSize]);
-
     return (
         <div className="flex flex-col gap-3 min-h-0 h-full">
-            <div
-                ref={terminalRef}
-                className="flex-1 min-h-0 overflow-auto bg-black font-mono text-xs border rounded-lg p-3 text-muted-foreground"
-            >
-                {lines.map((line, index) => (
-                    <div key={index}>{line}</div>
-                ))}
-                {lines.length === 0 && <div>Waiting for data...</div>}
-            </div>
-
             <div className="gap-3 flex flex-row flex-wrap items-center">
                 {/* Baud Rate */}
                 <Combobox
@@ -400,30 +347,8 @@ export default function SerialPanel() {
                         Disconnect
                     </Button>
                 ) : (
-                    <Button onClick={connect}>Connect</Button>
+                    <Button onClick={connect}>Connect serial</Button>
                 )}
-            </div>
-
-            <div className="flex flex-row gap-3">
-                <Input
-                    placeholder="Type a message..."
-                    value={inputText}
-                    onChange={(e) => setInputText(e.target.value)}
-                    onKeyDown={(e) => {
-                        if (e.key === 'Enter') {
-                            e.preventDefault();
-                            sendData();
-                        }
-                    }}
-                    disabled={!connected}
-                    className="flex-1"
-                />
-                <Button
-                    onClick={sendData}
-                    disabled={!connected || !inputText.trim()}
-                >
-                    <PaperPlaneRightIcon />
-                </Button>
             </div>
         </div>
     );

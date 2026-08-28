@@ -1,3 +1,5 @@
+import { SERIAL_SETTINGS } from '@/config';
+
 export type ParityType = 'none' | 'even' | 'odd';
 export type FlowControlType = 'none' | 'hardware';
 
@@ -7,20 +9,18 @@ export interface SerialOptions {
     stopBits?: 1 | 2; // Web Serial also allows 1.5, but we restrict to common values
     parity?: ParityType;
     flowControl?: FlowControlType;
-    bufferSize?: number; // number of lines to keep in ring buffer
 }
 
 const DEFAULT_OPTIONS: Required<SerialOptions> = {
-    baudRate: 115200,
-    dataBits: 8,
-    stopBits: 1,
-    parity: 'none',
-    flowControl: 'none',
-    bufferSize: 1000,
+    baudRate: SERIAL_SETTINGS.DEFAULT_BAUD_RATE,
+    dataBits: SERIAL_SETTINGS.DEFAULT_DATA_BITS,
+    stopBits: SERIAL_SETTINGS.DEFAULT_STOP_BITS,
+    parity: SERIAL_SETTINGS.DEFAULT_PARITY,
+    flowControl: SERIAL_SETTINGS.DEFAULT_FLOW_CONTROL,
 };
 
 export interface SerialCallbacks {
-    onData?: (lines: string[]) => void; // newly completed lines from the latest read
+    onData?: (lines: string[], timestamps?: number[]) => void; // newly completed lines and receive timestamps from the latest read
     onError?: (error: Error) => void;
     onConnect?: () => void;
     onDisconnect?: () => void;
@@ -32,12 +32,15 @@ export class SerialManager {
     private writer: WritableStreamDefaultWriter<Uint8Array> | null = null;
     private connected = false;
     private options: Required<SerialOptions>;
-    private lines: string[] = [];
     private lineBuffer = ''; // partial line from previous chunk
     private callbacks: SerialCallbacks[] = [];
     private readAbortController: AbortController | null = null;
     private latestLine: string | null = null;
     private latestLineTimestamp = 0;
+    private lastReceiveTimestamp = 0;
+    private lastChunkTimestamp = 0;
+    private estimatedLineIntervalMs: number =
+        SERIAL_SETTINGS.DEFAULT_ESTIMATED_LINE_INTERVAL_MS;
 
     constructor(callbacks: SerialCallbacks = {}) {
         this.options = { ...DEFAULT_OPTIONS };
@@ -90,7 +93,7 @@ export class SerialManager {
             this.readAbortController = new AbortController();
             await this.readLoop(this.readAbortController.signal);
         } catch (error) {
-            this.connected = false;
+            await this.cleanupConnection(false);
             const err =
                 error instanceof Error ? error : new Error(String(error));
             this.emitError(err);
@@ -100,39 +103,11 @@ export class SerialManager {
 
     /** Disconnect and clean up resources. */
     async disconnect(): Promise<void> {
-        if (!this.connected) return;
-
-        try {
-            // Cancel reader
-            if (this.reader) {
-                await this.reader.cancel();
-            }
-            if (this.readAbortController) {
-                this.readAbortController.abort();
-                this.readAbortController = null;
-            }
-
-            // Close writer
-            if (this.writer) {
-                await this.writer.close();
-                this.writer = null;
-            }
-
-            // Close port
-            if (this.port) {
-                await this.port.close();
-                this.port = null;
-            }
-
-            this.connected = false;
-            this.emitDisconnect();
-        } catch (error) {
-            const err =
-                error instanceof Error ? error : new Error(String(error));
-            this.emitError(err);
-            throw err;
+        if (!this.connected && !this.reader && !this.writer && !this.port) {
+            return;
         }
-        this.reader = null;
+
+        await this.cleanupConnection(true);
     }
 
     /** Send a line of text (appends newline automatically). */
@@ -143,12 +118,14 @@ export class SerialManager {
         if (!data.trim()) return;
 
         const encoded = new TextEncoder().encode(data + '\n');
-        await this.writer.write(encoded);
-    }
-
-    /** Get the current ring buffer of lines. */
-    getLines(): string[] {
-        return [...this.lines];
+        try {
+            await this.writer.write(encoded);
+        } catch (error) {
+            await this.cleanupConnection(true);
+            const err =
+                error instanceof Error ? error : new Error(String(error));
+            throw err;
+        }
     }
 
     getLatestLine(): string | null {
@@ -169,22 +146,11 @@ export class SerialManager {
         return { ...this.options };
     }
 
-    /** Set a new buffer size (trims lines if needed). */
-    setBufferSize(size: number): void {
-        if (size < 1) throw new Error('Buffer size must be at least 1');
-        this.options.bufferSize = size;
-        if (this.lines.length > size) {
-            this.lines = this.lines.slice(-size);
-        }
-    }
-
-    /** Clear the line buffer. */
     clearBuffer(): void {
-        this.lines = [];
         this.lineBuffer = '';
         this.latestLine = null;
         this.latestLineTimestamp = 0;
-        this.emitData(this.lines);
+        this.emitData([]);
     }
 
     // --- Private methods ---
@@ -209,6 +175,7 @@ export class SerialManager {
                 const err =
                     error instanceof Error ? error : new Error(String(error));
                 this.emitError(err);
+                await this.cleanupConnection(true);
             }
         } finally {
             if (this.reader) {
@@ -240,21 +207,60 @@ export class SerialManager {
         this.lineBuffer = remainder;
 
         if (completeLines.length > 0) {
-            // Append new lines and trim to buffer size
-            this.lines.push(...completeLines);
-            const bufferSize = this.options.bufferSize;
-            if (this.lines.length > bufferSize) {
-                this.lines = this.lines.slice(-bufferSize);
-            }
+            const timestamps = this.createReceiveTimestamps(
+                completeLines.length,
+            );
             this.latestLine = completeLines.at(-1) ?? null;
-            this.latestLineTimestamp = Date.now();
-            // Notify listeners with only the lines completed by this read.
-            this.emitData(completeLines);
+            this.latestLineTimestamp = timestamps.at(-1) ?? Date.now();
+            this.emitData(completeLines, timestamps);
         }
     }
 
-    private emitData(lines: string[]): void {
-        this.callbacks.forEach((callback) => callback.onData?.(lines));
+    private createReceiveTimestamps(count: number): number[] {
+        const now = performance.timeOrigin + performance.now();
+        const minimumStepMs = SERIAL_SETTINGS.TIMESTAMP_STEP_MS;
+        const previousLineTimestamp = this.lastReceiveTimestamp;
+
+        if (this.lastChunkTimestamp > 0) {
+            const chunkDelta = now - this.lastChunkTimestamp;
+            const observedInterval = Math.max(
+                minimumStepMs,
+                chunkDelta / Math.max(1, count),
+            );
+            // Keep the interval stable across jittery chunk sizes.
+            this.estimatedLineIntervalMs =
+                this.estimatedLineIntervalMs * 0.8 + observedInterval * 0.2;
+        }
+
+        const step = Math.max(this.estimatedLineIntervalMs, minimumStepMs);
+
+        let next =
+            previousLineTimestamp > 0
+                ? previousLineTimestamp + step
+                : now - step * (count - 1);
+
+        const projectedTail = next + step * (count - 1);
+        // After a long idle gap, re-anchor to current time.
+        if (now - projectedTail > step * 8) {
+            next = now - step * (count - 1);
+        }
+
+        const timestamps: number[] = [];
+        for (let index = 0; index < count; index += 1) {
+            timestamps.push(next);
+            next += step;
+        }
+
+        this.lastReceiveTimestamp =
+            timestamps.at(-1) ?? this.lastReceiveTimestamp;
+        this.lastChunkTimestamp = now;
+        return timestamps;
+    }
+
+    private emitData(lines: string[], timestamps?: number[]): void {
+        this.callbacks.forEach((callback) =>
+            callback.onData?.(lines, timestamps),
+        );
     }
 
     private emitConnect(): void {
@@ -267,5 +273,51 @@ export class SerialManager {
 
     private emitError(error: Error): void {
         this.callbacks.forEach((callback) => callback.onError?.(error));
+    }
+
+    private async cleanupConnection(emitDisconnect: boolean): Promise<void> {
+        const reader = this.reader;
+        const writer = this.writer;
+        const port = this.port;
+
+        this.connected = false;
+
+        if (this.readAbortController) {
+            this.readAbortController.abort();
+            this.readAbortController = null;
+        }
+
+        try {
+            if (reader) {
+                await reader.cancel();
+                reader.releaseLock();
+            }
+        } catch {
+            // The port may already be gone.
+        }
+
+        try {
+            if (writer) {
+                await writer.close();
+            }
+        } catch {
+            // The port may already be gone.
+        }
+
+        try {
+            if (port) {
+                await port.close();
+            }
+        } catch {
+            // The port may already be gone.
+        }
+
+        this.reader = null;
+        this.writer = null;
+        this.port = null;
+
+        if (emitDisconnect) {
+            this.emitDisconnect();
+        }
     }
 }

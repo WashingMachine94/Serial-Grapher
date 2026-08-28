@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { getSerialManager } from '@/utils/state';
 import { getBluetoothManager } from '@/utils/bluetooth';
 import { getFileUploadManager } from '@/utils/fileUpload';
@@ -44,20 +44,23 @@ import {
     ParserData,
     ParserTrigger,
 } from '@/utils/dataBufferManager';
-
-const MAX_TRANSLATION_LINES = 250;
+const EMPTY_PARSERS: ParserData[] = [];
 
 export default function TranslationPanel() {
     const [line, setLine] = useState<string | null>(null);
     const [highlightedLine, setHighlightedLine] = useState<string | null>(null);
-    const [triggerWarning, setTriggerWarning] = useState(false);
-    const [parsers, setParsers] = useState<ParserData[]>(() =>
-        dataBufferManager.getParsers(),
+    const [triggerWarningParserId, setTriggerWarningParserId] = useState<
+        string | null
+    >(null);
+    const parsers = useSyncExternalStore(
+        (onStoreChange) =>
+            dataBufferManager.subscribeNodesChanged(onStoreChange),
+        () => dataBufferManager.getParsers(),
+        () => EMPTY_PARSERS,
     );
     const [selectedPreset, setSelectedPreset] = useState('');
     const [subscribed, setSubscribed] = useState(false);
     const subscribedRef = useRef(false);
-    const sourceLinesRef = useRef<string[]>([]);
 
     const getLatestInputLine = () => {
         const candidates = [
@@ -77,17 +80,15 @@ export default function TranslationPanel() {
 
         if (candidates.length === 0) return null;
 
-        return candidates.sort((a, b) => a.timestamp - b.timestamp).at(-1)?.line ?? null;
+        return (
+            candidates.sort((a, b) => a.timestamp - b.timestamp).at(-1)?.line ??
+            null
+        );
     };
 
     useEffect(() => {
-        const unsubscribe = dataBufferManager.subscribeNodesChanged(() => {
-            const updatedParsers = dataBufferManager.getParsers();
-            setParsers(updatedParsers);
-        });
         if (dataBufferManager.getParsers().length === 0)
             dataBufferManager.addParser('Parser 1');
-        return unsubscribe;
     }, []);
 
     useEffect(() => {
@@ -98,21 +99,20 @@ export default function TranslationPanel() {
         const serialManager = getSerialManager();
         const bluetoothManager = getBluetoothManager();
         const fileUploadManager = getFileUploadManager();
-        sourceLinesRef.current = [
-            ...serialManager.getLines(),
-            ...bluetoothManager.getLines(),
-            ...fileUploadManager.getLines(),
-        ].slice(-MAX_TRANSLATION_LINES);
-        const handleIncomingLines = (newLines: string[]) => {
+        const handleIncomingLines = (
+            newLines: string[],
+            timestamps?: number[],
+        ) => {
             if (newLines.length === 0) return;
-            sourceLinesRef.current = [
-                ...sourceLinesRef.current,
-                ...newLines,
-            ].slice(-MAX_TRANSLATION_LINES);
-            if (subscribedRef.current)
-                newLines.forEach((incomingLine) =>
-                    dataBufferManager.processLine(incomingLine),
+            setLine(newLines.at(-1) ?? null);
+            if (subscribedRef.current) {
+                newLines.forEach((incomingLine, index) =>
+                    dataBufferManager.processLine(
+                        incomingLine,
+                        timestamps?.[index] ?? Date.now(),
+                    ),
                 );
+            }
         };
         const unsubscribeSerial = serialManager.registerCallbacks({
             onData: handleIncomingLines,
@@ -134,32 +134,12 @@ export default function TranslationPanel() {
         if (!subscribed)
             dataBufferManager.addParser(`Parser ${parsers.length + 1}`);
     };
-    const removeParser = () => {
-        if (!subscribed && parsers.length > 1)
-            dataBufferManager.removeParser(parsers.at(-1)!.id);
-    };
     const removeParserById = (id: string) => {
         dataBufferManager.removeParser(id);
     };
-    const removeNode = (id: string) => {
-        if (!subscribed) dataBufferManager.removeNode(id);
-    };
-    const updateNodeName = (id: string, name: string) => {
-        if (!subscribed) dataBufferManager.updateNode(id, { name });
-    };
-    const toggleTimestamp = (id: string) => {
-        if (!subscribed) {
-            const allNodes = dataBufferManager.getNodes();
-            const node = allNodes.find((item) => item.id === id);
-            if (node)
-                dataBufferManager.updateNode(id, {
-                    isTimestamp: !node.isTimestamp,
-                });
-        }
-    };
 
     return (
-        <div className="flex flex-col gap-4 p-3">
+        <div className="flex flex-col gap-4">
             <div className="flex flex-wrap items-center justify-between gap-2">
                 <span className="text-sm font-medium">Parsers</span>
                 <div className="flex gap-2">
@@ -175,21 +155,36 @@ export default function TranslationPanel() {
             </div>
 
             <div className="flex flex-col gap-2">
-                {parsers.map((parser, pIndex) => (
+                {parsers.map((parser) => (
                     <div key={parser.id} className="rounded-md border p-2">
                         <div className="flex items-center gap-2">
+                            <input
+                                type="checkbox"
+                                checked={parser.enabled}
+                                onChange={(e) =>
+                                    !subscribed &&
+                                    dataBufferManager.updateParser(parser.id, {
+                                        enabled: e.target.checked,
+                                    })
+                                }
+                                disabled={subscribed}
+                                className="h-4 w-4"
+                                title={`${parser.enabled ? 'Disable' : 'Enable'} ${parser.name}`}
+                            />
                             <div className="font-small">{parser.name}</div>
                             <div className="ml-auto flex items-center gap-2">
                                 <Popover>
-                                    <PopoverTrigger>
-                                        <Button
-                                            variant="ghost"
-                                            size="sm"
-                                            disabled={subscribed}
-                                            title={`Edit ${parser.name}`}
-                                        >
-                                            <PencilSimpleIcon size={16} />
-                                        </Button>
+                                    <PopoverTrigger
+                                        render={
+                                            <Button
+                                                variant="ghost"
+                                                size="sm"
+                                                disabled={subscribed}
+                                                title={`Edit ${parser.name}`}
+                                            />
+                                        }
+                                    >
+                                        <PencilSimpleIcon size={16} />
                                     </PopoverTrigger>
                                     <PopoverContent className="w-90">
                                         <PopoverHeader>
@@ -347,7 +342,8 @@ export default function TranslationPanel() {
                                                     variant="outline"
                                                     size="icon"
                                                     onClick={() => {
-                                                        const latest = getLatestInputLine();
+                                                        const latest =
+                                                            getLatestInputLine();
                                                         if (
                                                             !subscribed &&
                                                             latest
@@ -372,6 +368,11 @@ export default function TranslationPanel() {
                                                             parser.testLine ||
                                                             line ||
                                                             '';
+                                                        const matches =
+                                                            extractMatches(
+                                                                testLine,
+                                                                parser.regexPattern,
+                                                            );
                                                         const triggerMatched =
                                                             parser.triggerType ===
                                                             'includes'
@@ -382,8 +383,8 @@ export default function TranslationPanel() {
                                                                       parser.triggerValue,
                                                                   );
                                                         if (!triggerMatched) {
-                                                            setTriggerWarning(
-                                                                true,
+                                                            setTriggerWarningParserId(
+                                                                parser.id,
                                                             );
                                                             setHighlightedLine(
                                                                 `<span style="background-color: rgba(251, 191, 36, 0.25); color: #f59e0b; padding: 0 2px; border-radius: 2px;">${escapeHtml(
@@ -392,16 +393,18 @@ export default function TranslationPanel() {
                                                             );
                                                             return;
                                                         }
-                                                        setTriggerWarning(
-                                                            false,
+                                                        setTriggerWarningParserId(
+                                                            null,
                                                         );
+                                                        if (!subscribed)
+                                                            dataBufferManager.syncParserNodesFromMatches(
+                                                                parser.id,
+                                                                matches.length,
+                                                            );
                                                         setHighlightedLine(
                                                             highlightMatches(
                                                                 testLine,
-                                                                extractMatches(
-                                                                    testLine,
-                                                                    parser.regexPattern,
-                                                                ),
+                                                                matches,
                                                                 highlightColors,
                                                             ),
                                                         );
@@ -428,6 +431,14 @@ export default function TranslationPanel() {
                                                 }}
                                             />
                                         </div>
+                                        {triggerWarningParserId ===
+                                            parser.id && (
+                                            <div className="mt-1 flex items-center gap-1 text-xs text-amber-500">
+                                                <WarningIcon size={14} />
+                                                Trigger did not match this test
+                                                line.
+                                            </div>
+                                        )}
                                         <div className="border-t pt-2">
                                             <div className="mb-2 flex items-center justify-between">
                                                 <span className="text-sm font-medium">

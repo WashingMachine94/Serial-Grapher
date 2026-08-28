@@ -1,10 +1,12 @@
+import { SERIAL_SETTINGS } from '@/config';
+
 export interface BluetoothServiceInfo {
     uuid: string;
     characteristics: Array<{ uuid: string; properties: string[] }>;
 }
 
 export interface BluetoothCallbacks {
-    onData?: (lines: string[]) => void;
+    onData?: (lines: string[], timestamps?: number[]) => void;
     onError?: (error: Error) => void;
     onConnect?: () => void;
     onDisconnect?: () => void;
@@ -101,11 +103,11 @@ export class BluetoothManager {
     private deviceName = '';
     private services: BluetoothServiceInfo[] = [];
     private optionalServices: string[] = readServices();
-    private lines: string[] = [];
     private decoder = new TextDecoder();
     private callbacks: BluetoothCallbacks[] = [];
     private latestLine: string | null = null;
     private latestLineTimestamp = 0;
+    private lastReceiveTimestamp = 0;
 
     constructor(callbacks: BluetoothCallbacks = {}) {
         this.registerCallbacks(callbacks);
@@ -220,7 +222,7 @@ export class BluetoothManager {
             this.connected = true;
             this.emitConnect();
         } catch (error) {
-            await this.cleanup();
+            await this.cleanupConnection(false);
             const err =
                 error instanceof Error ? error : new Error(String(error));
             this.emitError(err);
@@ -229,9 +231,10 @@ export class BluetoothManager {
     }
 
     async disconnect(): Promise<void> {
-        if (!this.connected && !this.device) return;
-        await this.cleanup();
-        this.emitDisconnect();
+        if (!this.connected && !this.device && !this.rxCharacteristics.length) {
+            return;
+        }
+        await this.cleanupConnection(true);
     }
 
     async send(data: string): Promise<void> {
@@ -241,19 +244,24 @@ export class BluetoothManager {
         if (!data.trim()) return;
 
         const encoded = new TextEncoder().encode(data + '\n');
-        if (this.txCharacteristic.writeValueWithResponse) {
-            await this.txCharacteristic.writeValueWithResponse(encoded);
-        } else if (this.txCharacteristic.writeValueWithoutResponse) {
-            await this.txCharacteristic.writeValueWithoutResponse(encoded);
-        } else if (this.txCharacteristic.writeValue) {
-            await this.txCharacteristic.writeValue(encoded);
-        } else {
-            throw new Error('The selected characteristic cannot send data.');
+        try {
+            if (this.txCharacteristic.writeValueWithResponse) {
+                await this.txCharacteristic.writeValueWithResponse(encoded);
+            } else if (this.txCharacteristic.writeValueWithoutResponse) {
+                await this.txCharacteristic.writeValueWithoutResponse(encoded);
+            } else if (this.txCharacteristic.writeValue) {
+                await this.txCharacteristic.writeValue(encoded);
+            } else {
+                throw new Error(
+                    'The selected characteristic cannot send data.',
+                );
+            }
+        } catch (error) {
+            await this.cleanupConnection(true);
+            const err =
+                error instanceof Error ? error : new Error(String(error));
+            throw err;
         }
-    }
-
-    getLines(): string[] {
-        return [...this.lines];
     }
 
     getLatestLine(): string | null {
@@ -299,7 +307,6 @@ export class BluetoothManager {
     }
 
     clearBuffer(): void {
-        this.lines = [];
         this.decoder = new TextDecoder();
         this.latestLine = null;
         this.latestLineTimestamp = 0;
@@ -330,8 +337,7 @@ export class BluetoothManager {
 
     private handleDisconnect = (): void => {
         if (!this.connected) return;
-        void this.cleanup();
-        this.emitDisconnect();
+        void this.cleanupConnection(true);
     };
 
     private handleData(data: string): void {
@@ -346,15 +352,36 @@ export class BluetoothManager {
         if (packetEntries.at(-1) === '') packetEntries.pop();
         if (packetEntries.length === 0) return;
 
-        this.lines.push(...packetEntries);
-        if (this.lines.length > 1000) this.lines = this.lines.slice(-1000);
+        const timestamps = this.createReceiveTimestamps(packetEntries.length);
+
         this.latestLine = packetEntries.at(-1) ?? null;
-        this.latestLineTimestamp = Date.now();
-        this.emitData(packetEntries);
+        this.latestLineTimestamp = timestamps.at(-1) ?? Date.now();
+        this.emitData(packetEntries, timestamps);
     }
 
-    private async cleanup(): Promise<void> {
-        for (const characteristic of this.rxCharacteristics) {
+    private createReceiveTimestamps(count: number): number[] {
+        const base = performance.timeOrigin + performance.now();
+        const timestamps: number[] = [];
+        for (let index = 0; index < count; index += 1) {
+            const candidate = base + index * SERIAL_SETTINGS.TIMESTAMP_STEP_MS;
+            const next =
+                candidate <= this.lastReceiveTimestamp
+                    ? this.lastReceiveTimestamp +
+                      SERIAL_SETTINGS.TIMESTAMP_STEP_MS
+                    : candidate;
+            timestamps.push(next);
+            this.lastReceiveTimestamp = next;
+        }
+        return timestamps;
+    }
+
+    private async cleanupConnection(emitDisconnect: boolean): Promise<void> {
+        const characteristics = [...this.rxCharacteristics];
+        const device = this.device;
+
+        this.connected = false;
+
+        for (const characteristic of characteristics) {
             characteristic.removeEventListener(
                 'characteristicvaluechanged',
                 this.handleCharacteristicValue,
@@ -365,12 +392,13 @@ export class BluetoothManager {
                 // The device may already be disconnected.
             }
         }
-        if (this.device) {
-            this.device.removeEventListener(
+
+        if (device) {
+            device.removeEventListener(
                 'gattserverdisconnected',
                 this.handleDisconnect,
             );
-            if (this.device.gatt?.connected) this.device.gatt.disconnect();
+            if (device.gatt?.connected) device.gatt.disconnect();
         }
         this.rxCharacteristics = [];
         this.txCharacteristic = null;
@@ -379,11 +407,16 @@ export class BluetoothManager {
         this.deviceName = '';
         this.services = [];
         this.decoder = new TextDecoder();
-        this.decoder = new TextDecoder();
+
+        if (emitDisconnect) {
+            this.emitDisconnect();
+        }
     }
 
-    private emitData(lines: string[]): void {
-        this.callbacks.forEach((callback) => callback.onData?.(lines));
+    private emitData(lines: string[], timestamps?: number[]): void {
+        this.callbacks.forEach((callback) =>
+            callback.onData?.(lines, timestamps),
+        );
     }
 
     private emitConnect(): void {

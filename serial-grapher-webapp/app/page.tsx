@@ -3,73 +3,73 @@ import SerialPanel from '@/components/home/SerialPanel';
 import BluetoothPanel from '@/components/home/BluetoothPanel';
 import FileUploadPanel from '@/components/home/FileUploadPanel';
 import TranslationPanel from '@/components/home/TranslationPanel';
+import InputConsolePanel from '@/components/home/InputConsolePanel';
 import {
     ResizableHandle,
     ResizablePanel,
     ResizablePanelGroup,
 } from '@/components/ui/resizable';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { APP_LAYOUT } from '@/config';
 
 export default function Home() {
     return (
         <div className="h-full w-full flex flex-col flex-1">
             <ResizablePanelGroup orientation="horizontal" className="flex-1">
-                <ResizablePanel className="h-full" defaultSize="33%">
+                <ResizablePanel
+                    className="h-full"
+                    defaultSize={APP_LAYOUT.LEFT_PANEL_DEFAULT_SIZE}
+                    minSize={APP_LAYOUT.LEFT_PANEL_MIN_SIZE}
+                >
+                    <div className="flex h-full min-h-0 flex-col ">
+                        <div className="flex flex-wrap border border-r-0">
+                            <div className="min-w-42.5 max-w-42.5 flex  flex-1 flex-col border-r p-3 ">
+                                <div className="min-h-0 flex-1 overflow-hidden">
+                                    <SerialPanel />
+                                </div>
+                            </div>
+
+                            <div className="min-w-32.5 flex flex-1 flex-col p-3">
+                                <div className="min-h-0 flex-1 overflow-hidden">
+                                    <BluetoothPanel />
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="min-w-32.5 flex p-3 flex-col border-t-0 border">
+                            <div className="min-h-0 flex-1 overflow-hidden">
+                                <FileUploadPanel />
+                            </div>
+                        </div>
+
+                        <div className="min-h-0 flex-1 overflow-hidden p-3 ">
+                            <TranslationPanel />
+                        </div>
+                    </div>
+                </ResizablePanel>
+                <ResizableHandle />
+                <ResizablePanel>
                     <ResizablePanelGroup
                         orientation="vertical"
                         className="h-full"
                     >
                         <ResizablePanel
-                            defaultSize="0%"
-                            minSize={200}
-                            className="h-full min-h-0"
+                            defaultSize={
+                                APP_LAYOUT.RIGHT_PANEL_TOP_DEFAULT_SIZE
+                            }
+                            minSize={APP_LAYOUT.RIGHT_PANEL_TOP_MIN_SIZE}
                         >
-                            <div className="h-full min-h-0 overflow-hidden p-3 pt-0">
-                                <Tabs
-                                    defaultValue="serial"
-                                    className="h-full min-h-0 flex flex-col"
-                                >
-                                    <TabsList variant="line">
-                                        <TabsTrigger id="serial" value="serial">
-                                            Serial
-                                        </TabsTrigger>
-                                        <TabsTrigger id="ble" value="ble">
-                                            Bluetooth
-                                        </TabsTrigger>
-                                        <TabsTrigger id="file" value="file">
-                                            File Upload
-                                        </TabsTrigger>
-                                    </TabsList>
-                                    <TabsContent
-                                        value="serial"
-                                        className="flex h-full min-h-0 flex-col overflow-hidden"
-                                    >
-                                        <SerialPanel />
-                                    </TabsContent>
-                                    <TabsContent
-                                        value="ble"
-                                        className="flex h-full min-h-0 flex-col overflow-hidden"
-                                    >
-                                        <BluetoothPanel />
-                                    </TabsContent>
-                                    <TabsContent
-                                        value="file"
-                                        className="flex h-full min-h-0 flex-col overflow-hidden"
-                                    >
-                                        <FileUploadPanel />
-                                    </TabsContent>
-                                </Tabs>
-                            </div>
+                            <Dashboard />
                         </ResizablePanel>
                         <ResizableHandle />
-                        <ResizablePanel>
-                            <TranslationPanel />
+                        <ResizablePanel
+                            defaultSize={
+                                APP_LAYOUT.RIGHT_PANEL_BOTTOM_DEFAULT_SIZE
+                            }
+                            minSize={APP_LAYOUT.RIGHT_PANEL_BOTTOM_MIN_SIZE}
+                        >
+                            <InputConsolePanel />
                         </ResizablePanel>
                     </ResizablePanelGroup>
-                </ResizablePanel>
-                <ResizableHandle />
-                <ResizablePanel>
-                    <Dashboard />
                 </ResizablePanel>
             </ResizablePanelGroup>
         </div>

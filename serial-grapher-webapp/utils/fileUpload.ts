@@ -1,15 +1,16 @@
+import { SERIAL_SETTINGS } from '@/config';
+
 export interface FileUploadCallbacks {
-    onData?: (lines: string[]) => void;
+    onData?: (lines: string[], timestamps?: number[]) => void;
     onError?: (error: Error) => void;
     onFileProcessed?: (fileName: string, lines: number) => void;
 }
 
 export class FileUploadManager {
-    private lines: string[] = [];
-    private bufferSize = 1000;
     private callbacks: FileUploadCallbacks[] = [];
     private latestLine: string | null = null;
     private latestLineTimestamp = 0;
+    private lastReceiveTimestamp = 0;
 
     constructor(callbacks: FileUploadCallbacks = {}) {
         this.registerCallbacks(callbacks);
@@ -19,20 +20,10 @@ export class FileUploadManager {
         this.callbacks.push(callbacks);
 
         return () => {
-            this.callbacks = this.callbacks.filter((entry) => entry !== callbacks);
+            this.callbacks = this.callbacks.filter(
+                (entry) => entry !== callbacks,
+            );
         };
-    }
-
-    setBufferSize(size: number): void {
-        if (size < 1) throw new Error('Buffer size must be at least 1');
-        this.bufferSize = size;
-        if (this.lines.length > size) {
-            this.lines = this.lines.slice(-size);
-        }
-    }
-
-    getLines(): string[] {
-        return [...this.lines];
     }
 
     getLatestLine(): string | null {
@@ -44,7 +35,6 @@ export class FileUploadManager {
     }
 
     clearBuffer(): void {
-        this.lines = [];
         this.latestLine = null;
         this.latestLineTimestamp = 0;
         this.emitData([]);
@@ -55,7 +45,9 @@ export class FileUploadManager {
 
         try {
             const contents = await file.text();
-            const normalized = contents.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+            const normalized = contents
+                .replace(/\r\n/g, '\n')
+                .replace(/\r/g, '\n');
             const parsedLines = normalized
                 .split('\n')
                 .filter(
@@ -65,14 +57,15 @@ export class FileUploadManager {
 
             if (parsedLines.length === 0) return 0;
 
-            for (const line of parsedLines) {
-                this.lines.push(line);
-                if (this.lines.length > this.bufferSize) {
-                    this.lines = this.lines.slice(-this.bufferSize);
-                }
+            const timestamps = this.createReceiveTimestamps(parsedLines.length);
+
+            for (let index = 0; index < parsedLines.length; index += 1) {
+                const line = parsedLines[index];
+                const timestamp = timestamps[index] ?? Date.now();
+                if (!line) continue;
                 this.latestLine = line;
-                this.latestLineTimestamp = Date.now();
-                this.emitData([line]);
+                this.latestLineTimestamp = timestamp;
+                this.emitData([line], [timestamp]);
             }
 
             this.callbacks.forEach((callback) =>
@@ -80,10 +73,27 @@ export class FileUploadManager {
             );
             return parsedLines.length;
         } catch (error) {
-            const err = error instanceof Error ? error : new Error(String(error));
+            const err =
+                error instanceof Error ? error : new Error(String(error));
             this.emitError(err);
             throw err;
         }
+    }
+
+    private createReceiveTimestamps(count: number): number[] {
+        const base = performance.timeOrigin + performance.now();
+        const timestamps: number[] = [];
+        for (let index = 0; index < count; index += 1) {
+            const candidate = base + index * SERIAL_SETTINGS.TIMESTAMP_STEP_MS;
+            const next =
+                candidate <= this.lastReceiveTimestamp
+                    ? this.lastReceiveTimestamp +
+                      SERIAL_SETTINGS.TIMESTAMP_STEP_MS
+                    : candidate;
+            timestamps.push(next);
+            this.lastReceiveTimestamp = next;
+        }
+        return timestamps;
     }
 
     async injectFiles(files: File[] | FileList): Promise<number> {
@@ -94,8 +104,10 @@ export class FileUploadManager {
         return total;
     }
 
-    private emitData(lines: string[]): void {
-        this.callbacks.forEach((callback) => callback.onData?.(lines));
+    private emitData(lines: string[], timestamps?: number[]): void {
+        this.callbacks.forEach((callback) =>
+            callback.onData?.(lines, timestamps),
+        );
     }
 
     private emitError(error: Error): void {
