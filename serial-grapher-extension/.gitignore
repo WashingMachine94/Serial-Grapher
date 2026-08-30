@@ -12,13 +12,18 @@
 
 # testing
 /coverage
+/.vscode-test/
 
 # next.js
 /.next/
 /out/
+/media/webapp/
+/media/webapp/**
 
 # production
 /build
+/dist/
+*.vsix
 
 # misc
 .DS_Store
