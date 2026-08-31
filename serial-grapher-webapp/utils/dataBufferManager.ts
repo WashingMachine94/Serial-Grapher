@@ -9,6 +9,7 @@ export interface NodeData {
     parserId: string;
     parserName: string;
     name: string;
+    enabled: boolean;
     isTimestamp: boolean;
     color: string;
     buffer: Array<{ timestamp: number; value: number | string }>;
@@ -87,6 +88,7 @@ class DataBufferManager {
                     enabled: parser.enabled ?? true,
                     nodes: parser.nodes.map((node) => ({
                         ...node,
+                        enabled: node.enabled ?? true,
                         buffer: Array.isArray(node.buffer) ? node.buffer : [],
                     })),
                 }));
@@ -121,7 +123,9 @@ class DataBufferManager {
     }
 
     getEnabledNodes(): NodeData[] {
-        return this.getEnabledParsers().flatMap((parser) => parser.nodes);
+        return this.getEnabledParsers().flatMap((parser) =>
+            parser.nodes.filter((node) => node.enabled),
+        );
     }
 
     addParser(name: string): string {
@@ -194,6 +198,7 @@ class DataBufferManager {
                 parserId,
                 parserName: parser.name,
                 name: `Node ${i + 1}`,
+                enabled: true,
                 isTimestamp: false,
                 color: highlightColors[i % highlightColors.length],
                 buffer: [],
@@ -218,6 +223,7 @@ class DataBufferManager {
             parserId,
             parserName: parser.name,
             name,
+            enabled: true,
             isTimestamp,
             color: highlightColors[colorIndex],
             buffer: [],
@@ -243,7 +249,7 @@ class DataBufferManager {
 
     updateNode(
         id: string,
-        updates: Partial<Pick<NodeData, 'name' | 'isTimestamp'>>,
+        updates: Partial<Pick<NodeData, 'name' | 'enabled' | 'isTimestamp'>>,
     ) {
         this.parsers = this.parsers.map((parser) => {
             if (!parser.nodes.some((node) => node.id === id)) return parser;
@@ -319,10 +325,13 @@ class DataBufferManager {
             )
                 continue;
 
+            const enabledNodes = parser.nodes.filter((node) => node.enabled);
+            if (enabledNodes.length === 0) continue;
+
             const matches = this.extractMatches(line, parser.regexPattern);
             if (matches.length === 0) continue;
 
-            const timestampNode = parser.nodes.find((node) => node.isTimestamp);
+            const timestampNode = enabledNodes.find((node) => node.isTimestamp);
             const timestampIndex = timestampNode
                 ? parser.nodes.indexOf(timestampNode)
                 : -1;
@@ -334,6 +343,7 @@ class DataBufferManager {
             for (let index = 0; index < parser.nodes.length; index += 1) {
                 const node = parser.nodes[index];
                 if (!node) continue;
+                if (!node.enabled) continue;
                 const raw = matches[index] ?? '';
                 const parsed = parseFloat(raw);
                 const value: number | string =

@@ -29,7 +29,7 @@ export default function Home() {
                             </div>
 
                             <div className="min-w-32.5 flex flex-1 flex-col p-3">
-                                <div className="min-h-0 flex-1 overflow-hidden">
+                                <div className="min-h-0 flex-1 overflow-hidden mt-10">
                                     <BluetoothPanel />
                                 </div>
                             </div>

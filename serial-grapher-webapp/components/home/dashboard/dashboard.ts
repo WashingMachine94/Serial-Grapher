@@ -167,21 +167,24 @@ export function buildCsvExportContent(parsers: ParserData[]) {
     const blocks: string[] = [];
 
     for (const parser of parsers) {
-        if (parser.nodes.length === 0) continue;
+        if (!parser.enabled) continue;
+
+        const activeNodes = parser.nodes.filter((node) => node.enabled);
+        if (activeNodes.length === 0) continue;
 
         const rows: string[] = [];
         rows.push(`Parser: ${parser.name}`);
 
-        const header = parser.nodes.map((node) => node.name);
+        const header = activeNodes.map((node) => node.name);
         rows.push(header.map((cell) => formatCsvCell(cell)).join(','));
 
-        const timestampNode = parser.nodes.find((node) => node.isTimestamp);
+        const timestampNode = activeNodes.find((node) => node.isTimestamp);
 
         if (timestampNode) {
             const timestampValues = timestampNode.buffer;
             for (const timestampPoint of timestampValues) {
                 const row: string[] = [formatCsvCell(timestampPoint.value)];
-                for (const node of parser.nodes.filter(
+                for (const node of activeNodes.filter(
                     (candidate) => candidate.id !== timestampNode.id,
                 )) {
                     const match = node.buffer.find(
@@ -193,11 +196,11 @@ export function buildCsvExportContent(parsers: ParserData[]) {
             }
         } else {
             const longestLength = Math.max(
-                ...parser.nodes.map((node) => node.buffer.length),
+                ...activeNodes.map((node) => node.buffer.length),
                 0,
             );
             for (let index = 0; index < longestLength; index += 1) {
-                const row = parser.nodes.map((node) =>
+                const row = activeNodes.map((node) =>
                     formatCsvCell(node.buffer[index]?.value ?? ''),
                 );
                 rows.push(row.join(','));

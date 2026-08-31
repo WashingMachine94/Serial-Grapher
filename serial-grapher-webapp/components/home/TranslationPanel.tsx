@@ -518,15 +518,19 @@ export default function TranslationPanel() {
                                                                         <input
                                                                             type="checkbox"
                                                                             checked={
-                                                                                node.isTimestamp
+                                                                                node.enabled
                                                                             }
-                                                                            onChange={() =>
+                                                                            onChange={(
+                                                                                e,
+                                                                            ) =>
                                                                                 !subscribed &&
                                                                                 dataBufferManager.updateNode(
                                                                                     node.id,
                                                                                     {
-                                                                                        isTimestamp:
-                                                                                            !node.isTimestamp,
+                                                                                        enabled:
+                                                                                            e
+                                                                                                .target
+                                                                                                .checked,
                                                                                     },
                                                                                 )
                                                                             }
@@ -535,8 +539,45 @@ export default function TranslationPanel() {
                                                                             }
                                                                             className="h-4 w-4"
                                                                         />
-                                                                        Timestamp
+                                                                        Enabled
                                                                     </label>
+                                                                    <Button
+                                                                        variant={
+                                                                            node.isTimestamp
+                                                                                ? 'secondary'
+                                                                                : 'ghost'
+                                                                        }
+                                                                        size="sm"
+                                                                        onClick={() =>
+                                                                            !subscribed &&
+                                                                            dataBufferManager.updateNode(
+                                                                                node.id,
+                                                                                {
+                                                                                    isTimestamp:
+                                                                                        !node.isTimestamp,
+                                                                                },
+                                                                            )
+                                                                        }
+                                                                        disabled={
+                                                                            subscribed
+                                                                        }
+                                                                        className={
+                                                                            node.isTimestamp
+                                                                                ? 'ml-auto bg-red-700 text-white hover:bg-red-800 hover:text-white'
+                                                                                : 'ml-auto'
+                                                                        }
+                                                                        title={
+                                                                            node.isTimestamp
+                                                                                ? 'Unset timestamp node'
+                                                                                : 'Set as timestamp node'
+                                                                        }
+                                                                    >
+                                                                        <ClockIcon
+                                                                            size={
+                                                                                16
+                                                                            }
+                                                                        />
+                                                                    </Button>
                                                                     <Button
                                                                         variant="ghost"
                                                                         size="sm"
@@ -549,7 +590,6 @@ export default function TranslationPanel() {
                                                                         disabled={
                                                                             subscribed
                                                                         }
-                                                                        className="ml-auto"
                                                                     >
                                                                         <TrashIcon
                                                                             size={
@@ -577,44 +617,50 @@ export default function TranslationPanel() {
                             </div>
                         </div>
                         <div className="mt-2 flex flex-wrap items-center gap-3 text-sm text-muted-foreground">
-                            {parser.nodes.map((node, nIndex) => (
-                                <div
-                                    key={node.id}
-                                    className="flex items-center gap-1"
-                                >
+                            {parser.nodes
+                                .filter((node) => node.enabled)
+                                .map((node, nIndex) => (
                                     <div
-                                        style={{
-                                            width: 8,
-                                            height: 8,
-                                            borderRadius: 9999,
-                                            backgroundColor:
-                                                highlightColors[
-                                                    nIndex %
-                                                        highlightColors.length
-                                                ],
-                                        }}
-                                    />
-                                    <div className="flex items-center gap-1">
-                                        <span>{node.name}</span>
-                                        {node.isTimestamp && (
-                                            <ClockIcon size={12} />
-                                        )}
+                                        key={node.id}
+                                        className="flex items-center gap-1"
+                                    >
+                                        <div
+                                            style={{
+                                                width: 8,
+                                                height: 8,
+                                                borderRadius: 9999,
+                                                backgroundColor:
+                                                    highlightColors[
+                                                        nIndex %
+                                                            highlightColors.length
+                                                    ],
+                                            }}
+                                        />
+                                        <div className="flex items-center gap-1">
+                                            <span>{node.name}</span>
+                                            {node.isTimestamp && (
+                                                <ClockIcon size={12} />
+                                            )}
+                                        </div>
                                     </div>
-                                </div>
-                            ))}
+                                ))}
                         </div>
                     </div>
                 ))}
             </div>
             <div className="flex gap-2">
-                <div className="text-xs text-muted-foreground ">
+                {/* <div className="text-xs text-muted-foreground ">
                     {subscribed
                         ? 'Subscribed - data is flowing'
                         : 'Paused - configure parsers and nodes'}
-                    {parsers.some((p) =>
-                        p.nodes.some((node) => node.isTimestamp),
+                    {parsers.some(
+                        (p) =>
+                            p.enabled &&
+                            p.nodes.some(
+                                (node) => node.enabled && node.isTimestamp,
+                            ),
                     ) && ' | Using timestamp from this parser'}
-                </div>
+                </div> */}
                 <div className="flex flex-1"></div>
                 <Button
                     variant={subscribed ? 'destructive' : 'default'}
