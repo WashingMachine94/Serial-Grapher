@@ -1,14 +1,22 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+    type CSSProperties,
+    useCallback,
+    useEffect,
+    useMemo,
+    useRef,
+    useState,
+    useSyncExternalStore,
+} from 'react';
 import Highcharts from 'highcharts/highstock.src';
 import HighchartsReact from 'highcharts-react-official';
 import { ArrowLineDownIcon } from '@phosphor-icons/react';
 import { Button } from '@/components/ui/button';
-import { dataBufferManager } from '@/utils/dataBufferManager';
+import { dataBufferManager, type NodeData } from '@/utils/dataBufferManager';
+import { graphManager, type GraphType } from '@/utils/graphManager';
 import {
     ADD_POINT_LIMIT,
-    LAST_DRAWN_INDEX,
     ZOOM_FACTOR,
     DEFAULT_SCROLL_RANGE,
     applySnapping,
@@ -17,27 +25,145 @@ import {
     drawMeasurement,
     findClosestPoint,
     getLatestTimestamp,
-    getNonTimestampNodes,
     getVisibleWindowRange,
     numericChartOptions,
     renderCrosshairs,
-    useDashboardChartData,
 } from './dashboard/dashboard';
 
-export default function Dashboard() {
-    const { chartData } = useDashboardChartData();
+const EMPTY_GRAPHS: Array<{
+    id: string;
+    name: string;
+    type: GraphType;
+    nodeIds: string[];
+}> = [];
+const EMPTY_NODES: NodeData[] = [];
 
+function uniqueNodesById(nodes: NodeData[]) {
+    return Array.from(
+        new Map(nodes.map((node) => [node.id, node] as const)).values(),
+    );
+}
+
+function buildGraphSeries(graphType: GraphType, nodes: NodeData[]) {
+    return uniqueNodesById(nodes)
+        .filter((node) => node.enabled)
+        .filter((node) => !node.isTimestamp)
+        .map((node) => ({
+            id: node.id,
+            type:
+                graphType === 'area'
+                    ? 'area'
+                    : graphType === 'bar'
+                      ? 'column'
+                      : graphType === 'scatter'
+                        ? 'scatter'
+                        : 'line',
+            name: `${node.parserName}: ${node.name}`,
+            color: node.color,
+            fillOpacity: graphType === 'area' ? 0.18 : undefined,
+            data: (node.buffer ?? [])
+                .filter((point) => typeof point.value === 'number')
+                .map((point) => [point.timestamp, point.value]),
+            marker: { enabled: false },
+        }));
+}
+
+function buildGraphChartOptions(
+    title: string,
+    graphType: GraphType,
+    nodes: NodeData[],
+) {
+    const series = buildGraphSeries(graphType, nodes);
+
+    return {
+        ...numericChartOptions,
+        chart: {
+            ...numericChartOptions.chart,
+            height: null,
+            spacingTop: 8,
+            spacingBottom: 8,
+        },
+        title: {
+            text: title,
+            align: 'left',
+            style: { fontSize: '12px', fontWeight: '600' },
+        },
+        credits: { enabled: false },
+        legend: {
+            enabled: series.length > 1,
+            itemStyle: { fontSize: '10px' },
+        },
+        xAxis: {
+            ...numericChartOptions.xAxis,
+            type: 'datetime',
+            labels: { style: { fontSize: '9px' } },
+        },
+        yAxis: {
+            ...numericChartOptions.yAxis,
+            title: { text: '' },
+            labels: { style: { fontSize: '9px' } },
+        },
+        tooltip: { shared: false },
+        series,
+        navigator: { enabled: false },
+        scrollbar: { enabled: false },
+        rangeSelector: { enabled: false },
+        mapNavigation: { enabled: false },
+        exporting: { enabled: false },
+    };
+}
+
+type GraphChartCardProps = {
+    graphId: string;
+    title: string;
+    graphType: GraphType;
+    nodes: NodeData[];
+    className?: string;
+    style?: CSSProperties;
+    timestampSyncKeys: string[];
+    onBoundsChanged: (
+        timestampSyncKeys: string[],
+        min: number,
+        max: number,
+        sourceGraphId: string,
+    ) => void;
+    onRegisterSyncTarget: (
+        graphId: string,
+        timestampSyncKeys: string[],
+        applyBounds: (min: number, max: number, sourceGraphId: string) => void,
+    ) => void;
+    onUnregisterSyncTarget: (graphId: string) => void;
+};
+
+function GraphChartCard({
+    graphId,
+    title,
+    graphType,
+    nodes,
+    className,
+    style,
+    timestampSyncKeys,
+    onBoundsChanged,
+    onRegisterSyncTarget,
+    onUnregisterSyncTarget,
+}: GraphChartCardProps) {
     const [autoScroll, setAutoScroll] = useState(false);
     const [snapping] = useState(true);
     const [measuring, setMeasuring] = useState(false);
+    const [scrollRange, setScrollRange] = useState(DEFAULT_SCROLL_RANGE);
     const measureStartRef = useRef<number | null>(null);
-    const [scrollRange, setScrollRange] =
-        useState<number>(DEFAULT_SCROLL_RANGE);
-    const scrollRangeRef = useRef<number>(scrollRange);
-
     const chartRef = useRef<HighchartsReact.RefObject | null>(null);
+    const cardRef = useRef<HTMLDivElement | null>(null);
+    const chartHostRef = useRef<HTMLDivElement | null>(null);
     const visibleMapRef = useRef<Record<string, boolean>>({});
+    const lastDrawnIndexRef = useRef<Record<string, number>>({});
     const isPanningRef = useRef(false);
+    const scrollRangeRef = useRef<number>(scrollRange);
+    const hasSeenDataRef = useRef(false);
+    const suppressBoundsPublishRef = useRef(false);
+    const lastPublishedBoundsRef = useRef<{ min: number; max: number } | null>(
+        null,
+    );
 
     const getTimestampLabel = useCallback(() => {
         const now = new Date();
@@ -62,17 +188,13 @@ export default function Dashboard() {
         URL.revokeObjectURL(url);
     }, []);
 
-    useEffect(() => {
-        scrollRangeRef.current = scrollRange;
-    }, [scrollRange]);
-
     const exportCsv = useCallback(() => {
         const csv = buildCsvExportContent(dataBufferManager.getParsers());
         if (!csv) return;
 
         const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-        triggerDownload(blob, `Measurement - ${getTimestampLabel()}.csv`);
-    }, [getTimestampLabel, triggerDownload]);
+        triggerDownload(blob, `Graph - ${title} - ${getTimestampLabel()}.csv`);
+    }, [getTimestampLabel, title, triggerDownload]);
 
     const exportImage = useCallback(() => {
         const chart = chartRef.current?.chart;
@@ -84,13 +206,11 @@ export default function Dashboard() {
         if (!svgElement) return;
 
         const svgClone = svgElement.cloneNode(true) as SVGElement;
-
         svgClone
             .querySelectorAll(
                 '.highcharts-tooltip, .highcharts-label.highcharts-tooltip',
             )
             .forEach((element) => element.remove());
-
         svgClone
             .querySelectorAll('.highcharts-legend-item-hidden')
             .forEach((element) => element.remove());
@@ -119,7 +239,7 @@ export default function Dashboard() {
                 if (!blob) return;
                 triggerDownload(
                     blob,
-                    `Measurement - ${getTimestampLabel()}.png`,
+                    `Graph - ${title} - ${getTimestampLabel()}.png`,
                 );
             }, 'image/png');
         };
@@ -129,21 +249,125 @@ export default function Dashboard() {
         };
 
         image.src = svgUrl;
-    }, [getTimestampLabel, triggerDownload]);
+    }, [getTimestampLabel, title, triggerDownload]);
 
-    const hasData = chartData.datasets.some(
-        (dataset) => dataset.data.length > 0,
+    useEffect(() => {
+        scrollRangeRef.current = scrollRange;
+    }, [scrollRange]);
+
+    useEffect(() => {
+        const card = cardRef.current;
+        const chartHost = chartHostRef.current;
+        if (!card || !chartHost) return;
+
+        const resizeChart = () => {
+            const chart = chartRef.current?.chart;
+            if (!chart) return;
+
+            const width = chartHost.clientWidth;
+            const height = chartHost.clientHeight;
+            if (width <= 0 || height <= 0) return;
+
+            chart.setSize(width, height, false);
+        };
+
+        resizeChart();
+
+        const observer = new ResizeObserver(() => {
+            resizeChart();
+        });
+
+        observer.observe(card);
+        observer.observe(chartHost);
+
+        window.addEventListener('resize', resizeChart);
+
+        return () => {
+            window.removeEventListener('resize', resizeChart);
+            observer.disconnect();
+        };
+    }, []);
+
+    const publishBounds = useCallback(
+        (min: number, max: number) => {
+            if (suppressBoundsPublishRef.current) return;
+            if (!timestampSyncKeys.length) return;
+
+            const lastPublishedBounds = lastPublishedBoundsRef.current;
+            if (
+                lastPublishedBounds &&
+                Math.abs(lastPublishedBounds.min - min) < 0.001 &&
+                Math.abs(lastPublishedBounds.max - max) < 0.001
+            ) {
+                return;
+            }
+
+            lastPublishedBoundsRef.current = { min, max };
+            onBoundsChanged(timestampSyncKeys, min, max, graphId);
+        },
+        [graphId, onBoundsChanged, timestampSyncKeys],
     );
 
-    const optionsNumeric = useMemo(() => numericChartOptions, []);
+    const publishCurrentAxisBounds = useCallback(() => {
+        const chart = chartRef.current?.chart;
+        if (!chart) return;
+
+        const axis = chart.xAxis[0];
+        const min = axis.min;
+        const max = axis.max;
+        if (typeof min !== 'number' || typeof max !== 'number') return;
+        publishBounds(min, max);
+    }, [publishBounds]);
+
+    const applySyncedBounds = useCallback(
+        (min: number, max: number, sourceGraphId: string) => {
+            if (sourceGraphId === graphId) return;
+
+            const chart = chartRef.current?.chart;
+            if (!chart) return;
+
+            const axis = chart.xAxis[0];
+            const currentMin = axis.min as number | undefined;
+            const currentMax = axis.max as number | undefined;
+            if (
+                typeof currentMin === 'number' &&
+                typeof currentMax === 'number' &&
+                Math.abs(currentMin - min) < 0.001 &&
+                Math.abs(currentMax - max) < 0.001
+            ) {
+                return;
+            }
+
+            suppressBoundsPublishRef.current = true;
+            axis.setExtremes(min, max, true, false);
+            suppressBoundsPublishRef.current = false;
+            lastPublishedBoundsRef.current = { min, max };
+        },
+        [graphId],
+    );
+
+    useEffect(() => {
+        onRegisterSyncTarget(graphId, timestampSyncKeys, applySyncedBounds);
+        return () => onUnregisterSyncTarget(graphId);
+    }, [
+        applySyncedBounds,
+        graphId,
+        onRegisterSyncTarget,
+        onUnregisterSyncTarget,
+        timestampSyncKeys,
+    ]);
 
     const handleWheel = useCallback(
         (event: React.WheelEvent<HTMLDivElement>) => {
             if (event.shiftKey) return;
-
             event.preventDefault();
-            const delta = event.deltaY;
+            event.stopPropagation();
+            if (event.nativeEvent) {
+                event.nativeEvent.preventDefault();
+                event.nativeEvent.stopPropagation();
+            }
 
+            const delta = event.deltaY;
             let nextRange =
                 delta < 0
                     ? scrollRangeRef.current * (1 - ZOOM_FACTOR)
@@ -159,9 +383,9 @@ export default function Dashboard() {
             const chart = chartRef.current?.chart;
             if (!chart) return;
 
-            const nodes = getNonTimestampNodes();
-            const latest = getLatestTimestamp(nodes);
-
+            const latest = getLatestTimestamp(
+                nodes.filter((node) => node.enabled && !node.isTimestamp),
+            );
             if (autoScroll) {
                 if (latest > 0) {
                     chart.xAxis[0].setExtremes(
@@ -188,21 +412,94 @@ export default function Dashboard() {
                 false,
             );
         },
-        [autoScroll],
+        [autoScroll, nodes],
     );
 
-    // Interval for chart interaction and updates.
+    useEffect(() => {
+        const chart = chartRef.current?.chart;
+        if (!chart) return;
+
+        const graphNodes = nodes.filter(
+            (node) => node.enabled && !node.isTimestamp,
+        );
+        const currentIds = new Set(graphNodes.map((node) => node.id));
+
+        for (const existingSeries of chart.series) {
+            const id =
+                existingSeries.options && 'id' in existingSeries.options
+                    ? String(existingSeries.options.id ?? '')
+                    : '';
+            if (!id || !currentIds.has(id)) {
+                existingSeries.remove(false);
+            }
+        }
+
+        const allTimestamps = graphNodes.flatMap((node) =>
+            (node.buffer ?? [])
+                .filter((point) => typeof point.value === 'number')
+                .map((point) => point.timestamp),
+        );
+
+        const hasData = allTimestamps.length > 0;
+        const firstTimestamp = hasData ? Math.min(...allTimestamps) : 0;
+
+        if (!hasSeenDataRef.current && firstTimestamp > 0) {
+            const axis = chart.xAxis[0];
+            axis.setExtremes(
+                firstTimestamp,
+                firstTimestamp + scrollRangeRef.current,
+                false,
+                false,
+            );
+            hasSeenDataRef.current = true;
+        }
+
+        if (!hasData) {
+            hasSeenDataRef.current = false;
+        }
+
+        for (const node of graphNodes) {
+            const id = node.id;
+            const buffer = node.buffer || [];
+            const series = chart.get(id) as Highcharts.Series | undefined;
+            if (series) {
+                const nextData = buffer
+                    .map((point) =>
+                        typeof point.value === 'number'
+                            ? ([point.timestamp, point.value] as [
+                                  number,
+                                  number,
+                              ])
+                            : null,
+                    )
+                    .filter(
+                        (point): point is [number, number] => point != null,
+                    );
+                if (series.data.length !== nextData.length) {
+                    series.setData(nextData, false, false);
+                } else if (series.data.length === 0 && nextData.length === 0) {
+                    series.setData([], false, false);
+                }
+            }
+        }
+
+        chart.redraw();
+    }, [graphType, nodes]);
+
     useEffect(() => {
         const interval = setInterval(() => {
             const chart = chartRef.current?.chart;
             if (!chart || isPanningRef.current) return;
 
-            const nodes = getNonTimestampNodes();
-            const activeNodeIds = new Set(nodes.map((node) => node.id));
+            const graphNodes = nodes.filter(
+                (node) => node.enabled && !node.isTimestamp,
+            );
+            const activeNodeIds = new Set(graphNodes.map((node) => node.id));
             let didUpdateSeries = false;
             let didUpdateAxis = false;
+            const lastDrawnIndex = lastDrawnIndexRef.current;
 
-            Object.keys(LAST_DRAWN_INDEX).forEach((id) => {
+            Object.keys(lastDrawnIndex).forEach((id) => {
                 if (activeNodeIds.has(id)) return;
                 const staleSeries = chart.get(id) as
                     | Highcharts.Series
@@ -212,10 +509,10 @@ export default function Dashboard() {
                     staleSeries.remove(false);
                     didUpdateSeries = true;
                 }
-                delete LAST_DRAWN_INDEX[id];
+                delete lastDrawnIndex[id];
             });
 
-            for (const node of nodes) {
+            for (const node of graphNodes) {
                 const id = node.id;
                 const buffer = node.buffer || [];
                 let series = chart.get(id) as Highcharts.Series | undefined;
@@ -235,7 +532,14 @@ export default function Dashboard() {
                     const vis = visibleMapRef.current[id] ?? true;
                     series = chart.addSeries(
                         {
-                            type: 'line',
+                            type:
+                                graphType === 'area'
+                                    ? 'area'
+                                    : graphType === 'bar'
+                                      ? 'column'
+                                      : graphType === 'scatter'
+                                        ? 'scatter'
+                                        : 'line',
                             id,
                             name: `${node.parserName}: ${node.name}`,
                             data: initialData,
@@ -258,13 +562,45 @@ export default function Dashboard() {
                         false,
                         false,
                     ) as Highcharts.Series;
-                    LAST_DRAWN_INDEX[id] = buffer.length;
+                    lastDrawnIndex[id] = buffer.length;
                     didUpdateSeries = true;
                 }
 
-                if (LAST_DRAWN_INDEX[id] == null) LAST_DRAWN_INDEX[id] = 0;
+                if (lastDrawnIndex[id] == null) lastDrawnIndex[id] = 0;
 
-                if (buffer.length - LAST_DRAWN_INDEX[id] > ADD_POINT_LIMIT) {
+                if (buffer.length === 0) {
+                    if (lastDrawnIndex[id] > 0 || series.data.length) {
+                        series.setData([], false, false);
+                        lastDrawnIndex[id] = 0;
+                        didUpdateSeries = true;
+                    }
+                    continue;
+                }
+
+                if (buffer.length < lastDrawnIndex[id]) {
+                    series.setData(
+                        buffer
+                            .map((point) =>
+                                typeof point.value === 'number'
+                                    ? ([point.timestamp, point.value] as [
+                                          number,
+                                          number,
+                                      ])
+                                    : null,
+                            )
+                            .filter(
+                                (point): point is [number, number] =>
+                                    point != null,
+                            ),
+                        false,
+                        false,
+                    );
+                    lastDrawnIndex[id] = buffer.length;
+                    didUpdateSeries = true;
+                    continue;
+                }
+
+                if (buffer.length - lastDrawnIndex[id] > ADD_POINT_LIMIT) {
                     series.setData(
                         buffer
                             .map((point) =>
@@ -285,7 +621,7 @@ export default function Dashboard() {
                     didUpdateSeries = true;
                 } else {
                     for (
-                        let index = LAST_DRAWN_INDEX[id];
+                        let index = lastDrawnIndex[id];
                         index < buffer.length;
                         index += 1
                     ) {
@@ -300,12 +636,11 @@ export default function Dashboard() {
                         didUpdateSeries = true;
                     }
                 }
-
-                LAST_DRAWN_INDEX[id] = buffer.length;
+                lastDrawnIndex[id] = buffer.length;
             }
 
             if (autoScroll && !isPanningRef.current) {
-                const latest = getLatestTimestamp(nodes);
+                const latest = getLatestTimestamp(graphNodes);
                 const range = scrollRangeRef.current;
                 if (latest > 0) {
                     const axis = chart.xAxis[0];
@@ -318,6 +653,33 @@ export default function Dashboard() {
                         didUpdateAxis = true;
                     }
                 }
+            } else {
+                const allTimestamps = graphNodes.flatMap((node) =>
+                    (node.buffer ?? [])
+                        .filter((point) => typeof point.value === 'number')
+                        .map((point) => point.timestamp),
+                );
+                const firstTimestamp = allTimestamps.length
+                    ? Math.min(...allTimestamps)
+                    : 0;
+                if (firstTimestamp > 0) {
+                    const axis = chart.xAxis[0];
+                    const min = axis.min as number | undefined;
+                    const max = axis.max as number | undefined;
+                    const hasUninitializedRange =
+                        typeof min !== 'number' ||
+                        typeof max !== 'number' ||
+                        max - min <= 0;
+                    if (hasUninitializedRange) {
+                        axis.setExtremes(
+                            firstTimestamp,
+                            firstTimestamp + scrollRangeRef.current,
+                            false,
+                            false,
+                        );
+                        didUpdateAxis = true;
+                    }
+                }
             }
 
             if ((didUpdateSeries || didUpdateAxis) && !isPanningRef.current) {
@@ -326,13 +688,25 @@ export default function Dashboard() {
         }, 30);
 
         return () => clearInterval(interval);
-    }, [autoScroll]);
+    }, [autoScroll, graphType, nodes]);
 
     useEffect(() => {
         const chart = chartRef.current?.chart;
         if (!chart) return;
         const container = chart.container;
         if (!container) return;
+
+        const onWheelCapture = (event: WheelEvent) => {
+            const target = event.target as Node | null;
+            if (!target || !container.contains(target)) return;
+            event.preventDefault();
+            event.stopPropagation();
+        };
+
+        container.addEventListener('wheel', onWheelCapture, {
+            capture: true,
+            passive: false,
+        });
 
         let isDragging = false;
         let dragStartX = 0;
@@ -341,7 +715,6 @@ export default function Dashboard() {
         const onMouseDown = (event: MouseEvent) => {
             if (event.button !== 0) return;
             if (measuring) return;
-
             isDragging = false;
             isPanningRef.current = true;
             dragStartX = event.clientX;
@@ -350,29 +723,81 @@ export default function Dashboard() {
 
         const onMouseMoveDragCheck = (event: MouseEvent) => {
             if (!isPanningRef.current) return;
-
             const dx = Math.abs(event.clientX - dragStartX);
             const dy = Math.abs(event.clientY - dragStartY);
             if (dx > 3 || dy > 3) isDragging = true;
+
+            if (isDragging) {
+                publishCurrentAxisBounds();
+            }
         };
 
         const onWheel = (event: WheelEvent) => {
-            if (event.shiftKey) event.stopPropagation();
+            if (event.shiftKey) return;
+            event.preventDefault();
+            event.stopPropagation();
+            if (event.cancelable) {
+                event.preventDefault();
+            }
+            const delta = event.deltaY;
+            let nextRange =
+                delta < 0
+                    ? scrollRangeRef.current * (1 - ZOOM_FACTOR)
+                    : scrollRangeRef.current * (1 + ZOOM_FACTOR);
+
+            if (nextRange < 50) nextRange = 50;
+            if (nextRange > 1000 * 60 * 60 * 24)
+                nextRange = 1000 * 60 * 60 * 24;
+
+            scrollRangeRef.current = nextRange;
+            setScrollRange(nextRange);
+
+            const latest = getLatestTimestamp(
+                nodes.filter((node) => node.enabled && !node.isTimestamp),
+            );
+            const axis = chart.xAxis[0];
+            const min = axis.min as number | undefined;
+            const max = axis.max as number | undefined;
+            const center =
+                typeof min === 'number' && typeof max === 'number'
+                    ? (min + max) / 2
+                    : latest;
+            axis.setExtremes(
+                center - nextRange / 2,
+                center + nextRange / 2,
+                true,
+                false,
+            );
+        };
+
+        const clearCrosshairs = () => {
+            chart.xAxis[0].removePlotLine('x-cursor');
+            chart.yAxis[0].removePlotLine('y-cursor');
         };
 
         const onMouseMove = (event: MouseEvent) => {
             if (isPanningRef.current || isDragging) return;
-
             const pointer = chart.pointer.normalize(event);
-            if (isPanningRef.current || isDragging) return;
-
-            let x = chart.xAxis[0].toValue(pointer.chartX);
-            let y = chart.yAxis[0].toValue(pointer.chartY);
-            const range = getVisibleWindowRange(getNonTimestampNodes());
+            const x = chart.xAxis[0].toValue(pointer.chartX);
+            const y = chart.yAxis[0].toValue(pointer.chartY);
+            const range = getVisibleWindowRange(
+                nodes.filter((node) => node.enabled && !node.isTimestamp),
+            );
             const snapped = applySnapping(chart, x, y, snapping);
-            x = snapped.x;
-            y = snapped.y;
-            renderCrosshairs(chart, x, y, range);
+            renderCrosshairs(chart, snapped.x, snapped.y, range);
+        };
+
+        const onMouseLeave = () => {
+            clearCrosshairs();
+            publishCurrentAxisBounds();
+            isDragging = false;
+            isPanningRef.current = false;
+        };
+
+        const onMouseOut = (event: MouseEvent) => {
+            const nextTarget = event.relatedTarget as Node | null;
+            if (nextTarget && container.contains(nextTarget)) return;
+            clearCrosshairs();
         };
 
         const onClick = (event: MouseEvent) => {
@@ -407,6 +832,7 @@ export default function Dashboard() {
         };
 
         const onMouseUp = () => {
+            publishCurrentAxisBounds();
             isDragging = false;
             isPanningRef.current = false;
         };
@@ -415,20 +841,26 @@ export default function Dashboard() {
         container.addEventListener('mousemove', onMouseMoveDragCheck);
         container.addEventListener('wheel', onWheel, { passive: false });
         container.addEventListener('mousemove', onMouseMove);
+        container.addEventListener('mouseout', onMouseOut);
         container.addEventListener('click', onClick);
         container.addEventListener('mouseup', onMouseUp);
-        container.addEventListener('mouseleave', onMouseUp);
+        container.addEventListener('mouseleave', onMouseLeave);
 
         return () => {
+            container.removeEventListener('wheel', onWheelCapture, {
+                capture: true,
+                passive: false,
+            } as EventListenerOptions);
             container.removeEventListener('mousedown', onMouseDown);
             container.removeEventListener('mousemove', onMouseMoveDragCheck);
             container.removeEventListener('wheel', onWheel);
             container.removeEventListener('mousemove', onMouseMove);
+            container.removeEventListener('mouseout', onMouseOut);
             container.removeEventListener('click', onClick);
             container.removeEventListener('mouseup', onMouseUp);
-            container.removeEventListener('mouseleave', onMouseUp);
+            container.removeEventListener('mouseleave', onMouseLeave);
         };
-    }, [measuring, snapping]);
+    }, [measuring, nodes, publishCurrentAxisBounds, snapping]);
 
     useEffect(() => {
         if (!measuring) {
@@ -440,17 +872,18 @@ export default function Dashboard() {
 
     useEffect(() => {
         if (!autoScroll) return;
-
         const chart = chartRef.current?.chart;
         if (!chart) return;
 
-        const nodes = getNonTimestampNodes();
-        const latest = getLatestTimestamp(nodes);
+        const graphNodes = nodes.filter(
+            (node) => node.enabled && !node.isTimestamp,
+        );
+        const latest = getLatestTimestamp(graphNodes);
         if (latest <= 0) return;
 
         const range = scrollRangeRef.current;
         chart.xAxis[0].setExtremes(latest - range, latest, true, false);
-    }, [autoScroll]);
+    }, [autoScroll, nodes]);
 
     useEffect(() => {
         const onKeyDown = (event: KeyboardEvent) => {
@@ -479,14 +912,41 @@ export default function Dashboard() {
         };
 
         window.addEventListener('keydown', onKeyDown);
-        return () => {
-            window.removeEventListener('keydown', onKeyDown);
-        };
+        return () => window.removeEventListener('keydown', onKeyDown);
     }, []);
 
+    const options = useMemo(
+        () => ({
+            ...buildGraphChartOptions(title, graphType, nodes),
+            xAxis: {
+                ...numericChartOptions.xAxis,
+                type: 'datetime',
+                labels: { style: { fontSize: '9px' } },
+                events: {
+                    afterSetExtremes: (
+                        event: Highcharts.AxisSetExtremesEventObject,
+                    ) => {
+                        if (
+                            typeof event.min !== 'number' ||
+                            typeof event.max !== 'number'
+                        ) {
+                            return;
+                        }
+                        publishBounds(event.min, event.max);
+                    },
+                },
+            },
+        }),
+        [graphType, nodes, publishBounds, title],
+    );
+
     return (
-        <div className="flex h-full flex-col gap-3 p-4">
-            <div className="flex justify-end items-center gap-2">
+        <div
+            ref={cardRef}
+            style={style}
+            className={`relative overflow-hidden overscroll-contain rounded-md border bg-muted/20 ${className ?? ''}`}
+        >
+            <div className="absolute right-2 top-2 z-10 flex items-center gap-2">
                 <Button
                     variant={autoScroll ? 'default' : 'outline'}
                     onClick={() => setAutoScroll((value) => !value)}
@@ -494,7 +954,6 @@ export default function Dashboard() {
                 >
                     A
                 </Button>
-
                 <Button
                     variant={measuring ? 'default' : 'outline'}
                     onClick={() => setMeasuring((value) => !value)}
@@ -502,34 +961,235 @@ export default function Dashboard() {
                 >
                     M
                 </Button>
-
                 <Button variant="outline" onClick={exportCsv} className="gap-2">
-                    <ArrowLineDownIcon size={32} />
+                    <ArrowLineDownIcon size={18} />
                     CSV
                 </Button>
-
                 <Button
                     variant="outline"
                     onClick={exportImage}
                     className="gap-2"
                 >
-                    <ArrowLineDownIcon size={32} />
+                    <ArrowLineDownIcon size={18} />
                     Image
                 </Button>
             </div>
-            {!hasData ? (
-                <div className="h-100 flex items-center justify-center text-muted-foreground">
-                    No data yet. Configure nodes, regex, and press Subscribe.
-                </div>
-            ) : (
-                <div className="h-100" onWheel={handleWheel}>
-                    <HighchartsReact
-                        highcharts={Highcharts}
-                        options={optionsNumeric}
-                        ref={chartRef}
+            <div
+                ref={chartHostRef}
+                className="mt-1 h-full min-h-0 w-full overscroll-contain"
+                onWheel={handleWheel}
+                onWheelCapture={handleWheel}
+                onMouseLeave={() => {
+                    const chart = chartRef.current?.chart;
+                    if (!chart) return;
+                    chart.xAxis[0].removePlotLine('x-cursor');
+                    chart.yAxis[0].removePlotLine('y-cursor');
+                }}
+            >
+                <HighchartsReact
+                    highcharts={Highcharts}
+                    options={options}
+                    ref={chartRef}
+                    containerProps={{ style: { height: '100%' } }}
+                />
+            </div>
+        </div>
+    );
+}
+
+export default function Dashboard() {
+    const dashboardRef = useRef<HTMLDivElement | null>(null);
+    const [dashboardHeight, setDashboardHeight] = useState(0);
+    const syncTargetsRef = useRef<
+        Map<
+            string,
+            {
+                timestampSyncKeys: Set<string>;
+                applyBounds: (
+                    min: number,
+                    max: number,
+                    sourceGraphId: string,
+                ) => void;
+            }
+        >
+    >(new Map());
+
+    const graphs = useSyncExternalStore(
+        (onChange) => graphManager.subscribe(onChange),
+        () => graphManager.getGraphs(),
+        () => EMPTY_GRAPHS,
+    );
+
+    const allNodes = useSyncExternalStore(
+        (onChange) => dataBufferManager.subscribeNodesChanged(onChange),
+        () => dataBufferManager.getNodes(),
+        () => EMPTY_NODES,
+    );
+
+    const graphPanels = useMemo(() => {
+        return graphs
+            .map((graph) => ({
+                ...graph,
+                nodes: uniqueNodesById(
+                    graph.nodeIds
+                        .map((nodeId) =>
+                            allNodes.find((node) => node.id === nodeId),
+                        )
+                        .filter((node): node is NodeData => Boolean(node)),
+                ),
+            }))
+            .filter((graph) => graph.nodes.length > 0);
+    }, [allNodes, graphs]);
+
+    const graphCount = graphPanels.length;
+    const graphCardClassName =
+        graphCount === 1
+            ? 'h-full min-h-0'
+            : 'h-[calc(50%-0.375rem)] min-h-0 shrink-0';
+    const graphCardStyle = useMemo<CSSProperties | undefined>(() => {
+        if (dashboardHeight <= 0) return undefined;
+
+        if (graphCount === 1) {
+            return { height: `${dashboardHeight}px` };
+        }
+
+        const halfHeight = Math.max((dashboardHeight - 12) / 2, 240);
+        return {
+            height: `${halfHeight}px`,
+            flex: '0 0 auto',
+        };
+    }, [dashboardHeight, graphCount]);
+
+    useEffect(() => {
+        const element = dashboardRef.current;
+        if (!element) return;
+
+        const updateHeight = () => {
+            setDashboardHeight(element.clientHeight);
+        };
+
+        updateHeight();
+
+        const observer = new ResizeObserver(() => {
+            updateHeight();
+        });
+
+        observer.observe(element);
+
+        return () => {
+            observer.disconnect();
+        };
+    }, []);
+
+    const getTimestampSyncKeys = useCallback(
+        (nodes: NodeData[]) => {
+            const explicitTimestampNodeIds = nodes
+                .filter((node) => node.isTimestamp)
+                .map((node) => node.id);
+
+            const parserTimestampNodeIds = Array.from(
+                new Set(nodes.map((node) => node.parserId)),
+            )
+                .map(
+                    (parserId) =>
+                        allNodes.find(
+                            (node) =>
+                                node.parserId === parserId && node.isTimestamp,
+                        )?.id,
+                )
+                .filter((id): id is string => typeof id === 'string');
+
+            return Array.from(
+                new Set([
+                    ...explicitTimestampNodeIds,
+                    ...parserTimestampNodeIds,
+                ]),
+            );
+        },
+        [allNodes],
+    );
+
+    const publishSyncedBounds = useCallback(
+        (
+            timestampSyncKeys: string[],
+            min: number,
+            max: number,
+            sourceGraphId: string,
+        ) => {
+            if (timestampSyncKeys.length === 0) return;
+
+            const sourceKeySet = new Set(timestampSyncKeys);
+            syncTargetsRef.current.forEach((target, graphId) => {
+                if (graphId === sourceGraphId) return;
+
+                const sharesTimestamp = Array.from(
+                    target.timestampSyncKeys,
+                ).some((key) => sourceKeySet.has(key));
+                if (!sharesTimestamp) return;
+
+                target.applyBounds(min, max, sourceGraphId);
+            });
+        },
+        [],
+    );
+
+    const registerSyncTarget = useCallback(
+        (
+            graphId: string,
+            timestampSyncKeys: string[],
+            applyBounds: (
+                min: number,
+                max: number,
+                sourceGraphId: string,
+            ) => void,
+        ) => {
+            syncTargetsRef.current.set(graphId, {
+                timestampSyncKeys: new Set(timestampSyncKeys),
+                applyBounds,
+            });
+        },
+        [],
+    );
+
+    const unregisterSyncTarget = useCallback((graphId: string) => {
+        syncTargetsRef.current.delete(graphId);
+    }, []);
+
+    if (graphPanels.length === 0) {
+        return (
+            <div className="flex h-full items-center justify-center p-4 text-sm text-muted-foreground">
+                No graphs configured yet. Add a graph and assign nodes in the
+                Graphs panel.
+            </div>
+        );
+    }
+
+    return (
+        <div
+            ref={dashboardRef}
+            className={`flex h-full min-h-0 flex-col gap-3 overscroll-contain p-4 ${
+                graphCount > 2 ? 'overflow-y-auto' : 'overflow-y-hidden'
+            }`}
+        >
+            {graphPanels.map((graph) => {
+                const timestampSyncKeys = getTimestampSyncKeys(graph.nodes);
+
+                return (
+                    <GraphChartCard
+                        key={graph.id}
+                        graphId={graph.id}
+                        title={graph.name}
+                        graphType={graph.type}
+                        nodes={graph.nodes}
+                        className={graphCardClassName}
+                        style={graphCardStyle}
+                        timestampSyncKeys={timestampSyncKeys}
+                        onBoundsChanged={publishSyncedBounds}
+                        onRegisterSyncTarget={registerSyncTarget}
+                        onUnregisterSyncTarget={unregisterSyncTarget}
                     />
-                </div>
-            )}
+                );
+            })}
         </div>
     );
 }

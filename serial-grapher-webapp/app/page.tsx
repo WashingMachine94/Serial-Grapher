@@ -3,12 +3,14 @@ import SerialPanel from '@/components/home/SerialPanel';
 import BluetoothPanel from '@/components/home/BluetoothPanel';
 import FileUploadPanel from '@/components/home/FileUploadPanel';
 import TranslationPanel from '@/components/home/TranslationPanel';
+import GraphPanel from '@/components/home/GraphPanel';
 import InputConsolePanel from '@/components/home/InputConsolePanel';
 import {
     ResizableHandle,
     ResizablePanel,
     ResizablePanelGroup,
 } from '@/components/ui/resizable';
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { APP_LAYOUT } from '@/config';
 
 export default function Home() {
@@ -21,7 +23,7 @@ export default function Home() {
                     minSize={APP_LAYOUT.LEFT_PANEL_MIN_SIZE}
                 >
                     <div className="flex h-full min-h-0 flex-col ">
-                        <div className="flex flex-wrap border border-r-0">
+                        <div className="flex flex-wrap border-b">
                             <div className="min-w-42.5 max-w-42.5 flex  flex-1 flex-col border-r p-3 ">
                                 <div className="min-h-0 flex-1 overflow-hidden">
                                     <SerialPanel />
@@ -35,14 +37,42 @@ export default function Home() {
                             </div>
                         </div>
 
-                        <div className="min-w-32.5 flex p-3 flex-col border-t-0 border">
+                        <div className="min-w-32.5 flex p-3 flex-col border-b">
                             <div className="min-h-0 flex-1 overflow-hidden">
                                 <FileUploadPanel />
                             </div>
                         </div>
 
-                        <div className="min-h-0 flex-1 overflow-hidden p-3 ">
-                            <TranslationPanel />
+                        <div className="min-h-0 flex-1 overflow-hidden mt-1">
+                            <Tabs defaultValue="parsers" className="h-full">
+                                <TabsList
+                                    variant="line"
+                                    className="mb-3 w-full justify-start"
+                                >
+                                    <TabsTrigger value="parsers">
+                                        Parsers
+                                    </TabsTrigger>
+                                    <TabsTrigger value="graphs">
+                                        Graphs
+                                    </TabsTrigger>
+                                </TabsList>
+
+                                <TabsContent
+                                    value="parsers"
+                                    keepMounted
+                                    className="h-[calc(100%-3rem)] p-3 pt-0"
+                                >
+                                    <TranslationPanel />
+                                </TabsContent>
+
+                                <TabsContent
+                                    value="graphs"
+                                    keepMounted
+                                    className="h-[calc(100%-3rem)] p-3 pt-0"
+                                >
+                                    <GraphPanel />
+                                </TabsContent>
+                            </Tabs>
                         </div>
                     </div>
                 </ResizablePanel>

@@ -36,6 +36,8 @@ const STORAGE_KEY = 'serial-grapher.parsers.v1';
 
 class DataBufferManager {
     private parsers: ParserData[] = [];
+    private nodesCache: NodeData[] = [];
+    private enabledNodesCache: NodeData[] = [];
     private lastFallbackTimestamp = 0;
     private dataCallbacks: DataCallback[] = [];
     private nodeChangeCallbacks: NodesChangeCallback[] = [];
@@ -48,6 +50,14 @@ class DataBufferManager {
 
     constructor() {
         this.parsers = this.loadPersistedParsers();
+        this.refreshDerivedCaches();
+    }
+
+    private refreshDerivedCaches() {
+        this.nodesCache = this.parsers.flatMap((parser) => parser.nodes);
+        this.enabledNodesCache = this.getEnabledParsers().flatMap((parser) =>
+            parser.nodes.filter((node) => node.enabled),
+        );
     }
 
     private toPersistedParsers(): ParserData[] {
@@ -119,13 +129,11 @@ class DataBufferManager {
     }
 
     getNodes(): NodeData[] {
-        return this.parsers.flatMap((parser) => parser.nodes);
+        return this.nodesCache;
     }
 
     getEnabledNodes(): NodeData[] {
-        return this.getEnabledParsers().flatMap((parser) =>
-            parser.nodes.filter((node) => node.enabled),
-        );
+        return this.enabledNodesCache;
     }
 
     addParser(name: string): string {
@@ -143,6 +151,7 @@ class DataBufferManager {
                 nodes: [],
             },
         ];
+        this.refreshDerivedCaches();
         this.persistParsers();
         this.emitNodesChanged();
         return id;
@@ -150,6 +159,7 @@ class DataBufferManager {
 
     removeParser(id: string) {
         this.parsers = this.parsers.filter((parser) => parser.id !== id);
+        this.refreshDerivedCaches();
         this.persistParsers();
         this.emitNodesChanged();
     }
@@ -172,6 +182,7 @@ class DataBufferManager {
                   }
                 : parser,
         );
+        this.refreshDerivedCaches();
         this.persistParsers();
         this.emitNodesChanged();
     }
@@ -208,6 +219,7 @@ class DataBufferManager {
         this.parsers = this.parsers.map((item) =>
             item.id === parserId ? { ...item, nodes } : item,
         );
+        this.refreshDerivedCaches();
         this.persistParsers();
         this.emitNodesChanged();
     }
@@ -233,6 +245,7 @@ class DataBufferManager {
                 ? { ...item, nodes: [...item.nodes, node] }
                 : item,
         );
+        this.refreshDerivedCaches();
         this.persistParsers();
         this.emitNodesChanged();
         return id;
@@ -243,6 +256,7 @@ class DataBufferManager {
             ...parser,
             nodes: parser.nodes.filter((node) => node.id !== id),
         }));
+        this.refreshDerivedCaches();
         this.persistParsers();
         this.emitNodesChanged();
     }
@@ -264,6 +278,7 @@ class DataBufferManager {
                 })),
             };
         });
+        this.refreshDerivedCaches();
         this.persistParsers();
         this.emitNodesChanged();
     }
@@ -273,6 +288,7 @@ class DataBufferManager {
             ...parser,
             nodes: parser.nodes.map((node) => ({ ...node, buffer: [] })),
         }));
+        this.refreshDerivedCaches();
         this.persistParsers();
         this.emitNodesChanged();
     }
