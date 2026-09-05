@@ -31,8 +31,17 @@ type DataCallback = (
     dataPoint: { timestamp: number; value: number | string },
 ) => void;
 type NodesChangeCallback = () => void;
+type SubscriptionChangeCallback = () => void;
 
 const STORAGE_KEY = 'serial-grapher.parsers.v1';
+const VALID_TRIGGER_TYPES: ParserTrigger[] = ['includes', 'startsWith'];
+
+function isValidTriggerType(value: unknown): value is ParserTrigger {
+    return (
+        typeof value === 'string' &&
+        VALID_TRIGGER_TYPES.includes(value as ParserTrigger)
+    );
+}
 
 class DataBufferManager {
     private parsers: ParserData[] = [];
@@ -41,6 +50,8 @@ class DataBufferManager {
     private lastFallbackTimestamp = 0;
     private dataCallbacks: DataCallback[] = [];
     private nodeChangeCallbacks: NodesChangeCallback[] = [];
+    private subscriptionChangeCallbacks: SubscriptionChangeCallback[] = [];
+    private subscribed = false;
 
     private static instance: DataBufferManager;
     static getInstance(): DataBufferManager {
@@ -81,30 +92,133 @@ class DataBufferManager {
             const parsed = JSON.parse(raw);
             if (!Array.isArray(parsed)) return [];
 
-            return parsed
-                .filter(
-                    (
-                        parser,
-                    ): parser is Omit<ParserData, 'enabled'> & {
-                        enabled?: boolean;
-                    } =>
-                        !!parser &&
-                        typeof parser.id === 'string' &&
-                        typeof parser.name === 'string' &&
-                        Array.isArray(parser.nodes),
-                )
-                .map((parser) => ({
-                    ...parser,
-                    enabled: parser.enabled ?? true,
-                    nodes: parser.nodes.map((node) => ({
-                        ...node,
-                        enabled: node.enabled ?? true,
-                        buffer: Array.isArray(node.buffer) ? node.buffer : [],
-                    })),
-                }));
+            return this.sanitizeParsers(parsed);
         } catch {
             return [];
         }
+    }
+
+    private sanitizeParsers(parsers: unknown[]): ParserData[] {
+        return parsers
+            .filter(
+                (
+                    parser,
+                ): parser is {
+                    id: string;
+                    name: string;
+                    enabled?: boolean;
+                    triggerType?: ParserTrigger;
+                    triggerValue?: string;
+                    regexPattern?: string;
+                    testLine?: string;
+                    nodes: unknown[];
+                } =>
+                    !!parser &&
+                    typeof parser === 'object' &&
+                    typeof (parser as { id?: unknown }).id === 'string' &&
+                    typeof (parser as { name?: unknown }).name === 'string' &&
+                    Array.isArray((parser as { nodes?: unknown[] }).nodes),
+            )
+            .map((parser) => {
+                let hasTimestampNode = false;
+
+                const nodes = parser.nodes
+                    .filter(
+                        (
+                            node,
+                        ): node is {
+                            id?: string;
+                            parserId?: string;
+                            parserName?: string;
+                            name?: string;
+                            enabled?: boolean;
+                            isTimestamp?: boolean;
+                            color?: string;
+                            buffer?: Array<{
+                                timestamp: number;
+                                value: number | string;
+                            }>;
+                        } => !!node && typeof node === 'object',
+                    )
+                    .map((node, nodeIndex) => {
+                        const isTimestamp =
+                            !hasTimestampNode && node.isTimestamp === true;
+                        if (isTimestamp) {
+                            hasTimestampNode = true;
+                        }
+
+                        return {
+                            id:
+                                typeof node.id === 'string' && node.id.length
+                                    ? node.id
+                                    : this.createId(),
+                            parserId:
+                                typeof node.parserId === 'string' &&
+                                node.parserId.length
+                                    ? node.parserId
+                                    : parser.id,
+                            parserName:
+                                typeof node.parserName === 'string' &&
+                                node.parserName.length
+                                    ? node.parserName
+                                    : parser.name,
+                            name:
+                                typeof node.name === 'string' &&
+                                node.name.length
+                                    ? node.name
+                                    : `Node ${nodeIndex + 1}`,
+                            enabled: node.enabled ?? true,
+                            isTimestamp,
+                            color:
+                                typeof node.color === 'string' &&
+                                node.color.length
+                                    ? node.color
+                                    : highlightColors[
+                                          nodeIndex % highlightColors.length
+                                      ],
+                            buffer: Array.isArray(node.buffer)
+                                ? node.buffer
+                                      .filter(
+                                          (point) =>
+                                              !!point &&
+                                              Number.isFinite(
+                                                  point.timestamp,
+                                              ) &&
+                                              (typeof point.value ===
+                                                  'number' ||
+                                                  typeof point.value ===
+                                                      'string'),
+                                      )
+                                      .map((point) => ({
+                                          timestamp: point.timestamp,
+                                          value: point.value,
+                                      }))
+                                : [],
+                        } satisfies NodeData;
+                    });
+
+                return {
+                    id: parser.id,
+                    name: parser.name,
+                    enabled: parser.enabled ?? true,
+                    triggerType: isValidTriggerType(parser.triggerType)
+                        ? parser.triggerType
+                        : 'includes',
+                    triggerValue:
+                        typeof parser.triggerValue === 'string'
+                            ? parser.triggerValue
+                            : '',
+                    regexPattern:
+                        typeof parser.regexPattern === 'string'
+                            ? parser.regexPattern
+                            : '',
+                    testLine:
+                        typeof parser.testLine === 'string'
+                            ? parser.testLine
+                            : '',
+                    nodes,
+                } satisfies ParserData;
+            });
     }
 
     private persistParsers() {
@@ -124,6 +238,17 @@ class DataBufferManager {
         return this.parsers;
     }
 
+    getPersistableParsers(): ParserData[] {
+        return this.toPersistedParsers();
+    }
+
+    setParsers(parsers: ParserData[]) {
+        this.parsers = this.sanitizeParsers(parsers);
+        this.refreshDerivedCaches();
+        this.persistParsers();
+        this.emitNodesChanged();
+    }
+
     getEnabledParsers(): ParserData[] {
         return this.parsers.filter((parser) => parser.enabled);
     }
@@ -134,6 +259,16 @@ class DataBufferManager {
 
     getEnabledNodes(): NodeData[] {
         return this.enabledNodesCache;
+    }
+
+    isSubscribed() {
+        return this.subscribed;
+    }
+
+    setSubscribed(value: boolean) {
+        if (this.subscribed === value) return;
+        this.subscribed = value;
+        this.subscriptionChangeCallbacks.forEach((callback) => callback());
     }
 
     addParser(name: string): string {
@@ -405,6 +540,18 @@ class DataBufferManager {
             this.nodeChangeCallbacks = this.nodeChangeCallbacks.filter(
                 (cb) => cb !== callback,
             );
+        };
+    }
+
+    subscribeSubscriptionChanged(
+        callback: SubscriptionChangeCallback,
+    ): () => void {
+        this.subscriptionChangeCallbacks.push(callback);
+        return () => {
+            this.subscriptionChangeCallbacks =
+                this.subscriptionChangeCallbacks.filter(
+                    (cb) => cb !== callback,
+                );
         };
     }
 

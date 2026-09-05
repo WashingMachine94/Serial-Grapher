@@ -1,8 +1,6 @@
 'use client';
 
 import { useSyncExternalStore } from 'react';
-import Highcharts from 'highcharts/highstock.src';
-import HighchartsReact from 'highcharts-react-official';
 import { PlusIcon, TrashIcon } from '@phosphor-icons/react';
 import { Button } from '@/components/ui/button';
 import {
@@ -18,32 +16,9 @@ import {
     type GraphDefinition,
     type GraphType,
 } from '@/utils/graphManager';
-import { numericChartOptions } from './dashboard/dashboard';
 
 const EMPTY_NODES: NodeData[] = [];
 const EMPTY_GRAPHS: GraphDefinition[] = [];
-
-function buildGraphSeries(graph: GraphDefinition, nodes: NodeData[]) {
-    return nodes
-        .filter((node) => node.enabled && !node.isTimestamp)
-        .map((node) => ({
-            name: `${node.parserName}: ${node.name}`,
-            type:
-                graph.type === 'area'
-                    ? 'area'
-                    : graph.type === 'bar'
-                      ? 'column'
-                      : graph.type === 'scatter'
-                        ? 'scatter'
-                        : 'line',
-            color: node.color,
-            fillOpacity: graph.type === 'area' ? 0.18 : undefined,
-            data: (node.buffer ?? [])
-                .filter((point) => typeof point.value === 'number')
-                .map((point) => [point.timestamp, point.value]),
-            marker: { enabled: false },
-        }));
-}
 
 export default function GraphPanel() {
     const graphs = useSyncExternalStore(

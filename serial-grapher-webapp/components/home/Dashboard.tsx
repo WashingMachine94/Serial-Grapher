@@ -1,4 +1,4 @@
-'use client';
+﻿'use client';
 
 import {
     type CSSProperties,
@@ -37,6 +37,7 @@ const EMPTY_GRAPHS: Array<{
     nodeIds: string[];
 }> = [];
 const EMPTY_NODES: NodeData[] = [];
+const MANUAL_INTERACTION_LOCK_MS = 140;
 
 function uniqueNodesById(nodes: NodeData[]) {
     return Array.from(
@@ -120,6 +121,10 @@ type GraphChartCardProps = {
     nodes: NodeData[];
     className?: string;
     style?: CSSProperties;
+    autoScroll: boolean;
+    scrollRange: number;
+    onAutoScrollChange: (next: boolean) => void;
+    onScrollRangeChange: (next: number) => void;
     timestampSyncKeys: string[];
     onBoundsChanged: (
         timestampSyncKeys: string[],
@@ -142,15 +147,17 @@ function GraphChartCard({
     nodes,
     className,
     style,
+    autoScroll,
+    scrollRange,
+    onAutoScrollChange,
+    onScrollRangeChange,
     timestampSyncKeys,
     onBoundsChanged,
     onRegisterSyncTarget,
     onUnregisterSyncTarget,
 }: GraphChartCardProps) {
-    const [autoScroll, setAutoScroll] = useState(false);
     const [snapping] = useState(true);
     const [measuring, setMeasuring] = useState(false);
-    const [scrollRange, setScrollRange] = useState(DEFAULT_SCROLL_RANGE);
     const measureStartRef = useRef<number | null>(null);
     const chartRef = useRef<HighchartsReact.RefObject | null>(null);
     const cardRef = useRef<HTMLDivElement | null>(null);
@@ -160,6 +167,7 @@ function GraphChartCard({
     const isPanningRef = useRef(false);
     const scrollRangeRef = useRef<number>(scrollRange);
     const hasSeenDataRef = useRef(false);
+    const manualInteractionUntilRef = useRef(0);
     const suppressBoundsPublishRef = useRef(false);
     const lastPublishedBoundsRef = useRef<{ min: number; max: number } | null>(
         null,
@@ -319,6 +327,11 @@ function GraphChartCard({
         publishBounds(min, max);
     }, [publishBounds]);
 
+    const lockManualInteractionWindow = useCallback(() => {
+        manualInteractionUntilRef.current =
+            Date.now() + MANUAL_INTERACTION_LOCK_MS;
+    }, []);
+
     const applySyncedBounds = useCallback(
         (min: number, max: number, sourceGraphId: string) => {
             if (sourceGraphId === graphId) return;
@@ -338,12 +351,13 @@ function GraphChartCard({
                 return;
             }
 
+            lockManualInteractionWindow();
             suppressBoundsPublishRef.current = true;
             axis.setExtremes(min, max, true, false);
             suppressBoundsPublishRef.current = false;
             lastPublishedBoundsRef.current = { min, max };
         },
-        [graphId],
+        [graphId, lockManualInteractionWindow],
     );
 
     useEffect(() => {
@@ -356,64 +370,6 @@ function GraphChartCard({
         onUnregisterSyncTarget,
         timestampSyncKeys,
     ]);
-
-    const handleWheel = useCallback(
-        (event: React.WheelEvent<HTMLDivElement>) => {
-            if (event.shiftKey) return;
-            event.preventDefault();
-            event.stopPropagation();
-            if (event.nativeEvent) {
-                event.nativeEvent.preventDefault();
-                event.nativeEvent.stopPropagation();
-            }
-
-            const delta = event.deltaY;
-            let nextRange =
-                delta < 0
-                    ? scrollRangeRef.current * (1 - ZOOM_FACTOR)
-                    : scrollRangeRef.current * (1 + ZOOM_FACTOR);
-
-            if (nextRange < 50) nextRange = 50;
-            if (nextRange > 1000 * 60 * 60 * 24)
-                nextRange = 1000 * 60 * 60 * 24;
-
-            scrollRangeRef.current = nextRange;
-            setScrollRange(nextRange);
-
-            const chart = chartRef.current?.chart;
-            if (!chart) return;
-
-            const latest = getLatestTimestamp(
-                nodes.filter((node) => node.enabled && !node.isTimestamp),
-            );
-            if (autoScroll) {
-                if (latest > 0) {
-                    chart.xAxis[0].setExtremes(
-                        latest - nextRange,
-                        latest,
-                        true,
-                        false,
-                    );
-                }
-                return;
-            }
-
-            const axis = chart.xAxis[0];
-            const min = axis.min as number | undefined;
-            const max = axis.max as number | undefined;
-            const center =
-                typeof min === 'number' && typeof max === 'number'
-                    ? (min + max) / 2
-                    : latest;
-            axis.setExtremes(
-                center - nextRange / 2,
-                center + nextRange / 2,
-                true,
-                false,
-            );
-        },
-        [autoScroll, nodes],
-    );
 
     useEffect(() => {
         const chart = chartRef.current?.chart;
@@ -490,6 +446,8 @@ function GraphChartCard({
         const interval = setInterval(() => {
             const chart = chartRef.current?.chart;
             if (!chart || isPanningRef.current) return;
+            const interactionLocked =
+                Date.now() < manualInteractionUntilRef.current;
 
             const graphNodes = nodes.filter(
                 (node) => node.enabled && !node.isTimestamp,
@@ -639,7 +597,7 @@ function GraphChartCard({
                 lastDrawnIndex[id] = buffer.length;
             }
 
-            if (autoScroll && !isPanningRef.current) {
+            if (!interactionLocked && autoScroll && !isPanningRef.current) {
                 const latest = getLatestTimestamp(graphNodes);
                 const range = scrollRangeRef.current;
                 if (latest > 0) {
@@ -649,11 +607,18 @@ function GraphChartCard({
                     const min = axis.min as number | undefined;
                     const max = axis.max as number | undefined;
                     if (min !== nextMin || max !== nextMax) {
-                        axis.setExtremes(nextMin, nextMax, false, false);
+                        // Avoid feedback/flicker by not publishing timer-driven
+                        // autoscroll extremes as sync updates.
+                        suppressBoundsPublishRef.current = true;
+                        try {
+                            axis.setExtremes(nextMin, nextMax, false, false);
+                        } finally {
+                            suppressBoundsPublishRef.current = false;
+                        }
                         didUpdateAxis = true;
                     }
                 }
-            } else {
+            } else if (!interactionLocked) {
                 const allTimestamps = graphNodes.flatMap((node) =>
                     (node.buffer ?? [])
                         .filter((point) => typeof point.value === 'number')
@@ -696,18 +661,6 @@ function GraphChartCard({
         const container = chart.container;
         if (!container) return;
 
-        const onWheelCapture = (event: WheelEvent) => {
-            const target = event.target as Node | null;
-            if (!target || !container.contains(target)) return;
-            event.preventDefault();
-            event.stopPropagation();
-        };
-
-        container.addEventListener('wheel', onWheelCapture, {
-            capture: true,
-            passive: false,
-        });
-
         let isDragging = false;
         let dragStartX = 0;
         let dragStartY = 0;
@@ -717,6 +670,7 @@ function GraphChartCard({
             if (measuring) return;
             isDragging = false;
             isPanningRef.current = true;
+            lockManualInteractionWindow();
             dragStartX = event.clientX;
             dragStartY = event.clientY;
         };
@@ -736,9 +690,11 @@ function GraphChartCard({
             if (event.shiftKey) return;
             event.preventDefault();
             event.stopPropagation();
+            event.stopImmediatePropagation?.();
             if (event.cancelable) {
                 event.preventDefault();
             }
+            lockManualInteractionWindow();
             const delta = event.deltaY;
             let nextRange =
                 delta < 0
@@ -750,12 +706,16 @@ function GraphChartCard({
                 nextRange = 1000 * 60 * 60 * 24;
 
             scrollRangeRef.current = nextRange;
-            setScrollRange(nextRange);
+            onScrollRangeChange(nextRange);
 
             const latest = getLatestTimestamp(
                 nodes.filter((node) => node.enabled && !node.isTimestamp),
             );
             const axis = chart.xAxis[0];
+            if (autoScroll && latest > 0) {
+                axis.setExtremes(latest - nextRange, latest, true, false);
+                return;
+            }
             const min = axis.min as number | undefined;
             const max = axis.max as number | undefined;
             const center =
@@ -839,7 +799,10 @@ function GraphChartCard({
 
         container.addEventListener('mousedown', onMouseDown);
         container.addEventListener('mousemove', onMouseMoveDragCheck);
-        container.addEventListener('wheel', onWheel, { passive: false });
+        container.addEventListener('wheel', onWheel, {
+            passive: false,
+            capture: true,
+        });
         container.addEventListener('mousemove', onMouseMove);
         container.addEventListener('mouseout', onMouseOut);
         container.addEventListener('click', onClick);
@@ -847,20 +810,26 @@ function GraphChartCard({
         container.addEventListener('mouseleave', onMouseLeave);
 
         return () => {
-            container.removeEventListener('wheel', onWheelCapture, {
-                capture: true,
-                passive: false,
-            } as EventListenerOptions);
             container.removeEventListener('mousedown', onMouseDown);
             container.removeEventListener('mousemove', onMouseMoveDragCheck);
-            container.removeEventListener('wheel', onWheel);
+            container.removeEventListener('wheel', onWheel, {
+                capture: true,
+            });
             container.removeEventListener('mousemove', onMouseMove);
             container.removeEventListener('mouseout', onMouseOut);
             container.removeEventListener('click', onClick);
             container.removeEventListener('mouseup', onMouseUp);
             container.removeEventListener('mouseleave', onMouseLeave);
         };
-    }, [measuring, nodes, publishCurrentAxisBounds, snapping]);
+    }, [
+        autoScroll,
+        lockManualInteractionWindow,
+        measuring,
+        nodes,
+        onScrollRangeChange,
+        publishCurrentAxisBounds,
+        snapping,
+    ]);
 
     useEffect(() => {
         if (!measuring) {
@@ -872,6 +841,7 @@ function GraphChartCard({
 
     useEffect(() => {
         if (!autoScroll) return;
+        if (Date.now() < manualInteractionUntilRef.current) return;
         const chart = chartRef.current?.chart;
         if (!chart) return;
 
@@ -882,7 +852,14 @@ function GraphChartCard({
         if (latest <= 0) return;
 
         const range = scrollRangeRef.current;
-        chart.xAxis[0].setExtremes(latest - range, latest, true, false);
+        // Same as interval updates: autoscroll alignment should not rebroadcast
+        // and fight with active manual interactions.
+        suppressBoundsPublishRef.current = true;
+        try {
+            chart.xAxis[0].setExtremes(latest - range, latest, true, false);
+        } finally {
+            suppressBoundsPublishRef.current = false;
+        }
     }, [autoScroll, nodes]);
 
     useEffect(() => {
@@ -902,7 +879,7 @@ function GraphChartCard({
             const key = event.key.toLowerCase();
             if (key === 'a') {
                 event.preventDefault();
-                setAutoScroll((value) => !value);
+                onAutoScrollChange(!autoScroll);
             }
 
             if (key === 's') {
@@ -913,7 +890,7 @@ function GraphChartCard({
 
         window.addEventListener('keydown', onKeyDown);
         return () => window.removeEventListener('keydown', onKeyDown);
-    }, []);
+    }, [autoScroll, onAutoScrollChange]);
 
     const options = useMemo(
         () => ({
@@ -949,7 +926,7 @@ function GraphChartCard({
             <div className="absolute right-2 top-2 z-10 flex items-center gap-2">
                 <Button
                     variant={autoScroll ? 'default' : 'outline'}
-                    onClick={() => setAutoScroll((value) => !value)}
+                    onClick={() => onAutoScrollChange(!autoScroll)}
                     title="Autoscroll (Shift+A)"
                 >
                     A
@@ -977,8 +954,6 @@ function GraphChartCard({
             <div
                 ref={chartHostRef}
                 className="mt-1 h-full min-h-0 w-full overscroll-contain"
-                onWheel={handleWheel}
-                onWheelCapture={handleWheel}
                 onMouseLeave={() => {
                     const chart = chartRef.current?.chart;
                     if (!chart) return;
@@ -1000,6 +975,12 @@ function GraphChartCard({
 export default function Dashboard() {
     const dashboardRef = useRef<HTMLDivElement | null>(null);
     const [dashboardHeight, setDashboardHeight] = useState(0);
+    const [autoScrollByGraph, setAutoScrollByGraph] = useState<
+        Record<string, boolean>
+    >({});
+    const [scrollRangeByGraph, setScrollRangeByGraph] = useState<
+        Record<string, number>
+    >({});
     const syncTargetsRef = useRef<
         Map<
             string,
@@ -1109,6 +1090,68 @@ export default function Dashboard() {
         [allNodes],
     );
 
+    const timestampSyncKeysByGraph = useMemo(
+        () =>
+            new Map(
+                graphPanels.map((graph) => [
+                    graph.id,
+                    getTimestampSyncKeys(graph.nodes),
+                ]),
+            ),
+        [getTimestampSyncKeys, graphPanels],
+    );
+
+    const getLinkedGraphIds = useCallback(
+        (graphId: string) => {
+            const sourceKeys = timestampSyncKeysByGraph.get(graphId) ?? [];
+            if (sourceKeys.length === 0) return [graphId];
+
+            const sourceKeySet = new Set(sourceKeys);
+            const linked = [graphId];
+
+            timestampSyncKeysByGraph.forEach((targetKeys, targetGraphId) => {
+                if (targetGraphId === graphId) return;
+                const sharesTimestamp = targetKeys.some((key) =>
+                    sourceKeySet.has(key),
+                );
+                if (sharesTimestamp) {
+                    linked.push(targetGraphId);
+                }
+            });
+
+            return linked;
+        },
+        [timestampSyncKeysByGraph],
+    );
+
+    const setSharedAutoScroll = useCallback(
+        (graphId: string, nextValue: boolean) => {
+            const linkedGraphIds = getLinkedGraphIds(graphId);
+            setAutoScrollByGraph((current) => {
+                const next = { ...current };
+                linkedGraphIds.forEach((id) => {
+                    next[id] = nextValue;
+                });
+                return next;
+            });
+        },
+        [getLinkedGraphIds],
+    );
+
+    const setSharedScrollRange = useCallback(
+        (graphId: string, nextRange: number) => {
+            const linkedGraphIds = getLinkedGraphIds(graphId);
+            setScrollRangeByGraph((current) => {
+                const next = { ...current };
+                linkedGraphIds.forEach((id) => {
+                    next[id] = nextRange;
+                });
+                return next;
+            });
+        },
+        [getLinkedGraphIds],
+    );
+
     const publishSyncedBounds = useCallback(
         (
             timestampSyncKeys: string[],
@@ -1173,6 +1216,9 @@ export default function Dashboard() {
         >
             {graphPanels.map((graph) => {
                 const timestampSyncKeys = getTimestampSyncKeys(graph.nodes);
+                const autoScroll = autoScrollByGraph[graph.id] ?? false;
+                const scrollRange =
+                    scrollRangeByGraph[graph.id] ?? DEFAULT_SCROLL_RANGE;
 
                 return (
                     <GraphChartCard
@@ -1183,6 +1229,14 @@ export default function Dashboard() {
                         nodes={graph.nodes}
                         className={graphCardClassName}
                         style={graphCardStyle}
+                        autoScroll={autoScroll}
+                        scrollRange={scrollRange}
+                        onAutoScrollChange={(next) =>
+                            setSharedAutoScroll(graph.id, next)
+                        }
+                        onScrollRangeChange={(next) =>
+                            setSharedScrollRange(graph.id, next)
+                        }
                         timestampSyncKeys={timestampSyncKeys}
                         onBoundsChanged={publishSyncedBounds}
                         onRegisterSyncTarget={registerSyncTarget}

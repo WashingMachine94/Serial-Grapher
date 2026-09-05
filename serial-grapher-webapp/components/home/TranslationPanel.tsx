@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { useEffect, useState, useSyncExternalStore } from 'react';
 import { getSerialManager } from '@/utils/state';
 import { getBluetoothManager } from '@/utils/bluetooth';
 import { getFileUploadManager } from '@/utils/fileUpload';
@@ -9,8 +9,6 @@ import {
     ArrowsClockwiseIcon,
     PlusIcon,
     TrashIcon,
-    PlayIcon,
-    PauseIcon,
     WarningIcon,
     PencilSimpleIcon,
     ClockIcon,
@@ -59,8 +57,12 @@ export default function TranslationPanel() {
         () => EMPTY_PARSERS,
     );
     const [selectedPreset, setSelectedPreset] = useState('');
-    const [subscribed, setSubscribed] = useState(false);
-    const subscribedRef = useRef(false);
+    const subscribed = useSyncExternalStore(
+        (onStoreChange) =>
+            dataBufferManager.subscribeSubscriptionChanged(onStoreChange),
+        () => dataBufferManager.isSubscribed(),
+        () => false,
+    );
 
     const getLatestInputLine = () => {
         const candidates = [
@@ -92,10 +94,6 @@ export default function TranslationPanel() {
     }, []);
 
     useEffect(() => {
-        subscribedRef.current = subscribed;
-    }, [subscribed]);
-
-    useEffect(() => {
         const serialManager = getSerialManager();
         const bluetoothManager = getBluetoothManager();
         const fileUploadManager = getFileUploadManager();
@@ -105,7 +103,7 @@ export default function TranslationPanel() {
         ) => {
             if (newLines.length === 0) return;
             setLine(newLines.at(-1) ?? null);
-            if (subscribedRef.current) {
+            if (dataBufferManager.isSubscribed()) {
                 newLines.forEach((incomingLine, index) =>
                     dataBufferManager.processLine(
                         incomingLine,
@@ -647,41 +645,6 @@ export default function TranslationPanel() {
                         </div>
                     </div>
                 ))}
-            </div>
-            <div className="flex gap-2">
-                {/* <div className="text-xs text-muted-foreground ">
-                    {subscribed
-                        ? 'Subscribed - data is flowing'
-                        : 'Paused - configure parsers and nodes'}
-                    {parsers.some(
-                        (p) =>
-                            p.enabled &&
-                            p.nodes.some(
-                                (node) => node.enabled && node.isTimestamp,
-                            ),
-                    ) && ' | Using timestamp from this parser'}
-                </div> */}
-                <div className="flex flex-1"></div>
-                <Button
-                    variant={subscribed ? 'destructive' : 'default'}
-                    size="sm"
-                    onClick={() => setSubscribed((current) => !current)}
-                >
-                    {subscribed ? (
-                        <PauseIcon size={16} className="mr-1" />
-                    ) : (
-                        <PlayIcon size={16} className="mr-1" />
-                    )}
-                    {subscribed ? 'Stop' : 'Subscribe'}
-                </Button>
-                <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => dataBufferManager.clearBuffers()}
-                    disabled={subscribed}
-                >
-                    Clear
-                </Button>
             </div>
         </div>
     );
