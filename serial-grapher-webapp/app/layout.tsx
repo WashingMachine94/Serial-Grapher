@@ -20,6 +20,11 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
     title: 'Serial grapher',
     description: 'An app for visualizing data from microcontrollers.',
+    icons: {
+        icon: '/icon.svg',
+        shortcut: '/icon.svg',
+        apple: '/icon.svg',
+    },
 };
 
 export default function RootLayout({

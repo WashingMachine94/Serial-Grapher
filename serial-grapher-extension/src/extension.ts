@@ -26,7 +26,7 @@ export function activate(context: vscode.ExtensionContext) {
         100,
     );
     openDashboardStatusBarItem.name = 'Serial Grapher';
-    openDashboardStatusBarItem.text = '$(graph) Serial Grapher';
+    openDashboardStatusBarItem.text = '$(graph-line) Serial Grapher';
     openDashboardStatusBarItem.tooltip = 'Open Serial Grapher';
     openDashboardStatusBarItem.command = 'serial-grapher.openDashboard';
     openDashboardStatusBarItem.show();

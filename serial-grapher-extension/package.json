@@ -3,6 +3,7 @@
   "displayName": "serial-grapher",
   "description": "",
   "version": "0.0.1",
+  "icon": "./media/serial-grapher-icon.png",
   "engines": {
     "vscode": "^1.125.0"
   },
