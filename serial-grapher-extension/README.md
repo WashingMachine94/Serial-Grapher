@@ -1,170 +1,29 @@
 # Serial Grapher
 
-Serial Grapher is a full-stack project with two parts:
+Serial Grapher is a powerful VS Code extension for visualizing real-time data from microcontrollers, sensors, and embedded devices. It is designed for embedded systems engineers, makers, students, and hobbyists who want to monitor live signals, debug hardware, and inspect data without leaving the editor.
 
-- A Next.js web app for visualizing live serial data and uploaded logs
-- A VS Code extension that hosts that dashboard inside the editor
+## What it does
 
-This repo includes both the app and the extension, so you can build and run the dashboard locally or package the extension for installation in VS Code.
+Connect to your microcontroller using serial or Bluetooth, or import an existing log file such as CSV. Once data is available, each incoming line is processed through configurable parsers. For Bluetooth streams, each message is treated as a separate line, and for serial data each newline-delimited message is parsed in sequence.
 
-## Project structure
+Using regular expressions, each line is split into structured nodes that store the data values. It is recommended to include a timestamp variable and set that node as the timestamp field for the most accurate and reliable visualization.
 
-- `serial-grapher-webapp/` — Next.js dashboard frontend
-- `serial-grapher-extension/` — VS Code extension host and packaging metadata
+## Build graphs from your data
 
-## Requirements
+Open the Graph tab to create new graphs and drag in the nodes you want to plot. Add the timestamp node to each graph so the visualization can track time accurately, then connect the values you want to display. When you press Subscribe, incoming data is fed through the parsers and shown live on the selected graphs.
 
-- Node.js 20+ and npm
-- VS Code (for extension development and installation)
-- Optional: `vsce` for packaging the .vsix file
+## Work with files and saved configurations
 
-## Build the web app
+You can also upload a file of recorded data and visualize it the same way as live input. After capturing data, export it as CSV for analysis, documentation, or sharing. If you have a setup you want to reuse, you can save your current configuration, including your parsers and graphs, and load it again later.
 
-From the repo root:
+## Why use Serial Grapher
 
-1. Install dependencies:
+- Realtime visualization of data from microcontrollers
+- Great for embedded systems engineering, prototyping, debugging, and maker projects
+- Supports both serial and Bluetooth connections
+- Lets you parse data with regex-driven node extraction
+- Enables custom graph creation with time-based plotting
+- Exports captured data for later review
+- Saves and restores working configurations
 
-   ```bash
-   cd serial-grapher-webapp
-   npm install
-   ```
-
-2. Run the app locally in development mode:
-
-   ```bash
-   npm run dev
-   ```
-
-   The app will be available at `http://localhost:3000`.
-
-3. Build a production version:
-
-   ```bash
-   npm run build
-   ```
-
-   The project includes a `postbuild` hook that automatically copies the generated static export from `serial-grapher-webapp/out` into `serial-grapher-extension/media/webapp` so the extension can serve the dashboard.
-
-## Build the extension
-
-From the repo root:
-
-1. Install extension dependencies:
-
-   ```bash
-   cd serial-grapher-extension
-   npm install
-   ```
-
-2. Compile the extension during development:
-
-   ```bash
-   npm run compile
-   ```
-
-3. Build a production bundle for packaging:
-
-   ```bash
-   npm run package
-   ```
-
-4. Optional: lint the extension code:
-
-   ```bash
-   npm run lint
-   ```
-
-## Package the extension
-
-To create a VSIX package for installation in VS Code:
-
-```bash
-cd serial-grapher-extension
-npx @vscode/vsce package
-```
-
-This creates a `.vsix` file in the extension folder, such as:
-
-```bash
-serial-grapher-0.0.1.vsix
-```
-
-If you prefer to use the extension manifest script directly, the project already defines:
-
-```bash
-npm run package
-```
-
-For packaging, `vsce` is the standard tool to build the final installable extension.
-
-## Run the extension in VS Code
-
-For local debugging:
-
-1. Open the extension folder in VS Code
-2. Press `F5` to launch the Extension Development Host
-3. The extension becomes available inside the VS Code instance and can open the dashboard from the command palette or the extension command menu
-
-## Install the extension from a VSIX file
-
-Inside VS Code:
-
-1. Open the Command Palette
-2. Run `Extensions: Install from VSIX...`
-3. Select the generated `.vsix` file
-4. Reload the window when prompted
-
-You can also install it from the terminal:
-
-```bash
-code --install-extension serial-grapher-0.0.1.vsix
-```
-
-## Notes
-
-- The web app icon is defined in `serial-grapher-webapp/app/icon.svg` and is used as the browser favicon.
-- The VS Code extension icon is stored in `serial-grapher-extension/media/serial-grapher-icon.png` and referenced by the extension manifest.
-- For distribution, keep the web app built before packaging the extension so the embedded dashboard is up to date.
-
-## Commands only
-
-Run from repository root unless noted.
-
-### Web app
-
-```bash
-cd serial-grapher-webapp
-npm install
-npm run dev
-```
-
-```bash
-cd serial-grapher-webapp
-npm run build
-```
-
-### Extension
-
-```bash
-cd serial-grapher-extension
-npm install
-npm run compile
-```
-
-```bash
-cd serial-grapher-extension
-npm run package
-```
-
-### VSIX package
-
-```bash
-cd serial-grapher-extension
-npx @vscode/vsce package
-```
-
-### Install extension in VS Code
-
-```bash
-code --install-extension serial-grapher-0.0.1.vsix
-```
+Serial Grapher gives you a simple way to turn raw device output into useful insights and clean visual timelines directly inside VS Code.

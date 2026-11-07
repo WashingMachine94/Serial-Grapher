@@ -1,7 +1,7 @@
 {
   "name": "serial-grapher",
   "displayName": "serial-grapher",
-  "description": "",
+  "description": "Visualize live serial and Bluetooth data from microcontrollers in VS Code with parsers, custom graphs, CSV import/export, and saved configurations.",
   "version": "0.0.1",
   "icon": "./media/serial-grapher-icon.png",
   "engines": {

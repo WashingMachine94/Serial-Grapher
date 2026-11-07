@@ -56,5 +56,3 @@ cd serial-grapher-extension
 npm install
 npm run compile
 ```
-
-Then press `F5` in VS Code to launch the Extension Development Host.

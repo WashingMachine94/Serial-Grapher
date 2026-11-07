@@ -416,8 +416,9 @@ export default function TranslationPanel() {
                                                 </Button>
                                             </div>
                                         </Field>
-                                        <div className="min-h-8 rounded-lg border bg-black p-2 font-mono text-xs text-muted-foreground">
+                                        <div className="min-h-8 rounded-lg border bg-black p-1 px-1.5 font-mono text-xs text-muted-foreground">
                                             <div
+                                                className="overflow-x-auto"
                                                 dangerouslySetInnerHTML={{
                                                     __html:
                                                         highlightedLine ||

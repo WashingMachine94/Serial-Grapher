@@ -1,6 +1,7 @@
 import { getSerialManager } from './state';
 import { highlightColors } from './translation';
 import { getFileUploadManager } from './fileUpload';
+import { graphManager } from './graphManager';
 
 export type ParserTrigger = 'includes' | 'startsWith';
 
@@ -357,6 +358,30 @@ class DataBufferManager {
         this.refreshDerivedCaches();
         this.persistParsers();
         this.emitNodesChanged();
+
+        const targetGraph = graphManager
+            .getGraphs()
+            .find((graph) =>
+                graph.nodeIds.some((nodeId) =>
+                    nodes.some((node) => node.id === nodeId),
+                ),
+            ) ??
+            graphManager
+                .getGraphs()
+                .find((graph) => graph.nodeIds.length === 0) ?? {
+                id: graphManager.addGraph(),
+                name: 'Graph 1',
+                type: 'line',
+                nodeIds: [],
+            };
+
+        if (targetGraph.id) {
+            for (const node of nodes) {
+                if (!targetGraph.nodeIds.includes(node.id)) {
+                    graphManager.assignNodeToGraph(targetGraph.id, node.id);
+                }
+            }
+        }
     }
 
     addNode(parserId: string, name: string, isTimestamp = false): string {

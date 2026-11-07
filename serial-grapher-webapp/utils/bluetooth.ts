@@ -54,7 +54,7 @@ interface BluetoothDeviceLike extends EventTarget {
 interface BluetoothLike {
     requestDevice(options: {
         acceptAllDevices: true;
-        optionalServices: string[];
+        optionalServices?: string[];
     }): Promise<BluetoothDeviceLike>;
 }
 

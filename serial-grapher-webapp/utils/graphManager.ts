@@ -70,17 +70,16 @@ class GraphManager {
 
     addGraph() {
         const nextNumber = this.graphs.length + 1;
-        this.graphs = [
-            ...this.graphs,
-            {
-                id: `graph-${Date.now()}-${nextNumber}`,
-                name: `Graph ${nextNumber}`,
-                type: 'line',
-                nodeIds: [],
-            },
-        ];
+        const graph: GraphDefinition = {
+            id: `graph-${Date.now()}-${nextNumber}`,
+            name: `Graph ${nextNumber}`,
+            type: 'line',
+            nodeIds: [],
+        };
+        this.graphs = [...this.graphs, graph];
         this.persistGraphs();
         this.emit();
+        return graph.id;
     }
 
     removeGraph(graphId: string) {

@@ -133,10 +133,11 @@
   }
 }
 
-/* width */
+/* width/height */
 ::-webkit-scrollbar {
   background-color: transparent;
   width: 4px;
+  height: 4px;
   margin: 2px;
 }
 
