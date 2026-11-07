@@ -2,6 +2,8 @@
 
 Serial Grapher is a powerful VS Code extension for visualizing real-time data from microcontrollers, sensors, and embedded devices. It is designed for embedded systems engineers, makers, students, and hobbyists who want to monitor live signals, debug hardware, and inspect data without leaving the editor.
 
+![alt](https://raw.githubusercontent.com/WashingMachine94/Serial-Grapher/refs/heads/main/serial-grapher-extension/images/IMU.png)
+
 ## What it does
 
 Connect to your microcontroller using serial or Bluetooth, or import an existing log file such as CSV. Once data is available, each incoming line is processed through configurable parsers. For Bluetooth streams, each message is treated as a separate line, and for serial data each newline-delimited message is parsed in sequence.
